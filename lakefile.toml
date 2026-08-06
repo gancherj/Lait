@@ -1,0 +1,10 @@
+name = "lait"
+version = "0.1.0"
+defaultTargets = ["lait"]
+
+[[lean_lib]]
+name = "Lait"
+
+[[lean_exe]]
+name = "lait"
+root = "Main"
