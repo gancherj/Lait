@@ -28,7 +28,7 @@ def addHoverInfoDelab (stx : Syntax) (s : String) : MetaM Unit :=
       lctx := (← getLCtx)
       expectedType? := none
       expr := mkConst ``Unit
-      docString? := s!"`{s}`"
+      mkDocString? := some (fun _ => pure s!"`{s}`")
     }
 
 def strGadget (_ : String) : Unit := ()
