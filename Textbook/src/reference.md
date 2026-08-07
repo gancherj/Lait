@@ -21,7 +21,7 @@ Additionally, if you just want to type check an expression but not evaluate it, 
 
 ## Basic Types and Operators
 
-Lait supports the basic data types `Int` (whole numbers), `Bool` (`true` and `false`), `Str` (strings), and `Unit` (the type with only one value, `()`). 
+Lait supports the basic data types `Int` (whole numbers), `Bool` (`true` and `false`), `String` (strings), and `Unit` (the type with only one value, `()`). 
 
 We compute in Lait using _expressions_, which are impure computations that eventually result in _values_. 
 
@@ -86,7 +86,7 @@ Boolean values can be tested using `if`:
 
 ### Strings
 
-Values of type `Str` are given using double quotes.
+Values of type `String` are given using double quotes.
 Strings support one basic operation: _concatenation_, given by `++`, which puts the two strings together.
 
 ```lean

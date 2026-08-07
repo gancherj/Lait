@@ -76,7 +76,7 @@ import Lait.Elab
       end
     end
 
-  def Str.of_num (n : Int) : Str = %num2string {n}
+  def String.of_num (n : Int) : String = %num2string {n}
 
   def assert (b : Bool) : Unit =
     if not b then error "Assertion failed" else ()

@@ -64,7 +64,7 @@ syntax "Bool" : lait_ty
 /--
 The type of strings, written in quotes.
 -/
-syntax "Str" : lait_ty
+syntax "String" : lait_ty
 /--
 The unit type, which has only one value: `()`.
 -/
@@ -124,7 +124,7 @@ partial def elabLaitTy (t : Lean.TSyntax `lait_ty) : TermElabM Surface.Ty :=
   | `(lait_ty | Int) => mkSurfaceTy t.raw .Int
   | `(lait_ty | Bool) => mkSurfaceTy t.raw .Bool
   | `(lait_ty | Unit) => mkSurfaceTy t.raw .Unit
-  | `(lait_ty | Str) => mkSurfaceTy t.raw .Str
+  | `(lait_ty | String) => mkSurfaceTy t.raw .Str
   | `(lait_ty | $t1:lait_ty -> $t2:lait_ty) => do
       mkSurfaceTy t.raw (.Arrow (← elabLaitTy t1) (← elabLaitTy t2))
   | `(lait_ty | $t1:lait_ty * $t2:lait_ty) => do

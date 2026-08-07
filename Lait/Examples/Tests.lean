@@ -32,11 +32,11 @@ import Lait.Examples.Tests1
 -- type Visibility = | Public | Hidden
 --
 -- type Result = {
---   label : Str,
+--   label : String,
 --   value : Int,
 --   threshold : Option<Int>,
 --   status : Status,
---   message : Option<Str>,
+--   message : Option<String>,
 --   visibility : Visibility
 -- }
 --

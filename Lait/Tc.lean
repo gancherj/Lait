@@ -199,7 +199,7 @@ partial def Ty.pretty : Ty 0 → String
 partial def TyX.pretty : TyX 0 → String
   | .Int => "Int"
   | .Bool => "Bool"
-  | .Str => "Str"
+  | .Str => "String"
   | .Unit => "Unit"
   | .Arrow t1 t2 => s!"({Ty.pretty t1} -> {Ty.pretty t2})"
   | .Prod t1 t2 => s!"({Ty.pretty t1} * {Ty.pretty t2})"
