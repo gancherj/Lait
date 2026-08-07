@@ -291,6 +291,15 @@ partial def solveAux : List Constraint → List (Lean.Name × TyX 0) →
           solveAux (extra ++ cs) sbst
         else
           throwErrorAt stx s!"Cannot unify {TyX.pretty t1} with {TyX.pretty t2}"
+      | .Record xs, .Record ys => do
+          let xs := xs.mergeSort (fun x y => x.1 <= y.1)
+          let ys := ys.mergeSort (fun x y => x.1 <= y.1)
+          if xs.map Prod.fst = ys.map Prod.fst then
+            let extra : List Constraint :=
+              (xs.zip ys).map fun ⟨(_, y), (_, w)⟩ => (stx, y.get, w.get)
+            solveAux (extra ++ cs) sbst
+          else
+            throwErrorAt stx s!"Cannot unify {TyX.pretty t1} with {TyX.pretty t2}"
       | _, _ =>
         throwErrorAt stx s!"Cannot unify {TyX.pretty t1} with {TyX.pretty t2}"
 

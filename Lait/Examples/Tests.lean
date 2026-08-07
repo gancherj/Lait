@@ -6,15 +6,37 @@ import Lait
 
 
 def List.head (xs : List<a>) : Option<a> =
-  match xs with 
+  match xs with
   | [] => None
   | x :: _ => Some x
   end
 
 def List.headIsPositive (xs : List<Int>) : Bool =
-  match List.head xs with 
+  match List.head xs with
   | None => false -- List is empty, so head is not positive
   | Some x => x > 0
   end
 
-/- -/ 
+type Status = | Ok | Err
+type Visibility = | Public | Hidden
+
+type Result = {
+  label : Str,
+  value : Int,
+  threshold : Option<Int>,
+  status : Status,
+  message : Option<Str>,
+  visibility : Visibility
+}
+
+def exampleResult : Result = {
+  label = "Example",
+  value = 10,
+  threshold = Some 10,
+  status = Ok,
+  message = Some "Example output",
+  visibility = Public
+}
+
+
+/- -/

@@ -206,7 +206,7 @@ syntax "|" "[]" "=>" lait_exp : lait_match_arm
 syntax "|" lait_ident "::" lait_ident "=>" lait_exp : lait_match_arm
 syntax "|" "_" "=>" lait_exp : lait_match_arm
 syntax lait_exp "^" ident : lait_exp
-syntax ident ":=" lait_exp : lait_field
+syntax ident "=" lait_exp : lait_field
 syntax "{" lait_field,* "}" : lait_exp
 syntax "%" ident "{" lait_exp,* "}" : lait_exp
 syntax "[]" : lait_exp
@@ -273,7 +273,7 @@ partial def elabLaitMatchArm (a : Lean.TSyntax `lait_match_arm) : TermElabM (Sum
 
 partial def elabLaitField (f : Lean.TSyntax `lait_field) : TermElabM (_root_.String × Surface.Exp) :=
   match f with
-  | `(lait_field | $id:ident := $e:lait_exp) => do
+  | `(lait_field | $id:ident = $e:lait_exp) => do
     let e ← elabLaitExp e
     pure (id.getId.toString, e)
   | _ => throwUnsupportedSyntax
