@@ -535,10 +535,14 @@ partial def elabLaitInductiveTuple (id : Ident) (tvars : List Ident) (cs : TSynt
     pure (id.getId.toString, tvars.map (·.getId.toString), cs')
 
 mutual
-partial def elabLaitDeclList (ds : Lean.TSyntaxArray `lait_decl) : TermElabM (List Surface.DeclEntry) :=
-  ds.toList.mapM elabLaitDecl
+/-- `included` tracks the Lait modules already spliced in by `#include`, making
+`#include` idempotent; see the `#include` case of `elabLaitDecl`. -/
+partial def elabLaitDeclList (included : IO.Ref NameSet) (ds : Lean.TSyntaxArray `lait_decl) :
+    TermElabM (List Surface.DeclEntry) :=
+  ds.toList.mapM (elabLaitDecl included)
 
-partial def elabLaitDecl (d : Lean.TSyntax `lait_decl) : TermElabM Surface.DeclEntry :=
+partial def elabLaitDecl (included : IO.Ref NameSet) (d : Lean.TSyntax `lait_decl) :
+    TermElabM Surface.DeclEntry :=
   match d with
   | `(lait_decl | def $id:lait_ident = $e:lait_exp) => do
     let name ← elabLaitIdent id
@@ -594,11 +598,22 @@ partial def elabLaitDecl (d : Lean.TSyntax `lait_decl) : TermElabM Surface.DeclE
     let e ← elabLaitExp e
     mkSurfaceDeclEntry d.raw (.DeclCheck e)
   | `(lait_decl | #include $e:ident) => do
-    match (<- getModule e.getId) with
-    | some stx => do
-       let ds <- elabLaitDeclList stx
-       mkSurfaceDeclEntry d.raw (.DeclList ds)
-    | none => throwErrorAt e.raw s!"unknown lait module `{e.getId}`"
+    -- `#include` is idempotent: a module that has already been spliced into the
+    -- module being elaborated contributes nothing the second time.  Without this,
+    -- a diamond (`#include stdlib` together with `#include M`, where `M` itself
+    -- includes `stdlib`) would re-declare stdlib's types and be rejected as a
+    -- duplicate definition.
+    let m := e.getId
+    if (<- included.get).contains m then
+      mkSurfaceDeclEntry d.raw (.DeclList List.nil)
+    else
+      match (<- getModule m) with
+      | some stx => do
+         -- Marked as included *before* recursing, so an include cycle terminates.
+         included.modify (·.insert m)
+         let ds <- elabLaitDeclList included stx
+         mkSurfaceDeclEntry d.raw (.DeclList ds)
+      | none => throwErrorAt e.raw s!"unknown lait module `{m}`"
   | _ => throwUnsupportedSyntax
 end
 
@@ -631,12 +646,17 @@ structure LaitCtx where
   freshCounter : Nat
   evalEnv : List Val
   evalState : EvalState
+  /-- Lait modules already spliced in by `#include`.  Accumulates across the
+  commands of a `#lait` file, so that `#include M` in a later command skips a
+  module the file already pulled in (e.g. the `stdlib` that `#lait` includes). -/
+  included : Lean.NameSet
 
 instance : Inhabited LaitCtx where
   default :=
     { n := 0, vars := List.nil, hvars := rfl, varMap := Vec.nil
       opMap := initTcOpMap, tyMap := initTyMap, frozen := {}
-      freshCounter := 0, evalEnv := List.nil, evalState := EvalState.new }
+      freshCounter := 0, evalEnv := List.nil, evalState := EvalState.new
+      included := {} }
 
 initialize laitCtxExt : EnvExtension LaitCtx ← registerEnvExtension (pure default)
 
@@ -661,7 +681,7 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     let (evalEnv', evalState') ← liftTermElabM <| Decl.runFrom decl ctx.evalEnv ctx.evalState
     pure { n := vars'.length, vars := vars', hvars := rfl, varMap := vm
            opMap := om, tyMap := tm, frozen := fr, freshCounter := st.freshCounter
-           evalEnv := evalEnv', evalState := evalState' }
+           evalEnv := evalEnv', evalState := evalState', included := ctx.included }
 
 /-- Record a failed elaboration of module `name` as an `.error` result, so that
 Lean code reading the module's outputs back (`getEvalResults`,
@@ -682,7 +702,10 @@ elab "{lait_decl" i:ident d:lait_decl* "}" : command => do
   if (← liftCoreM <| getModule i.getId).isSome then
     throwErrorAt i s!"Module `{i.getId}` already exists"
   try
-    let ds ← liftTermElabM <| d.mapM elabLaitDecl
+    -- A self-contained module also starts from an empty set of includes.
+    let ds ← liftTermElabM do
+      let included ← IO.mkRef ({} : NameSet)
+      d.mapM (elabLaitDecl included)
     -- A `{lait_decl …}` block is a self-contained module: check/run it from a
     -- fresh context, then store its raw syntax for later `#include` and the
     -- `#eval` results it produced for later inspection from Lean.
@@ -723,10 +746,15 @@ def elabLaitModuleTop : CommandElab := fun stx => do
   suppressLeanCompletions stx
   try
     let decls := collectLaitModuleDecls stx
-    let ds ← liftTermElabM <| decls.mapM fun d => elabLaitDecl ⟨d⟩
     let ctx := laitCtxExt.getState (← getEnv)
+    -- Includes are tracked per file, not per command, so a module pulled in by an
+    -- earlier command of this file is not spliced in again by this one.
+    let (ds, included) ← liftTermElabM do
+      let included ← IO.mkRef ctx.included
+      let ds ← decls.mapM fun d => elabLaitDecl included ⟨d⟩
+      return (ds, ← included.get)
     let ctx' ← processBatch ctx ds
-    modifyEnv (laitCtxExt.setState · ctx')
+    modifyEnv (laitCtxExt.setState · { ctx' with included })
     -- The file's top-level declarations form a Lait module named after the file, just
     -- like the ones written with `{lait_decl …}`: record this command's syntax and the
     -- `#eval` results it produced, so both can be read back later (`#include`,

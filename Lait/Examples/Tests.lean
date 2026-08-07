@@ -1,52 +1,53 @@
 import Lait
 import Lait.Examples.Tests1
 
+
 {lait_decl my_decls
+  #include stdlib
   #include Tests1
   -- def bar = baz
-  def bar = foo + 1
   #eval 42
-  #eval bar
 }
 
 
-#lait
-
-
-#check Some 1
-
-
-def List.head (xs : List<a>) : Option<a> =
-  match xs with
-  | [] => None
-  | x :: _ => Some x
-  end
-
-def List.headIsPositive (xs : List<Int>) : Bool =
-  match List.head xs with
-  | None => false -- List is empty, so head is not positive
-  | Some x => x > 0
-  end
-
-type Status = | Ok | Err
-type Visibility = | Public | Hidden
-
-type Result = {
-  label : Str,
-  value : Int,
-  threshold : Option<Int>,
-  status : Status,
-  message : Option<Str>,
-  visibility : Visibility
-}
-
-def exampleResult : Result = {
-  label = "Example",
-  value = 10,
-  threshold = Some 10,
-  status = Ok,
-  message = Some "Example output",
-  visibility = Public
-}
-
-/- -/
+-- #lait
+--
+--
+-- #check Some 1
+--
+--
+-- def List.head (xs : List<a>) : Option<a> =
+--   match xs with
+--   | [] => None
+--   | x :: _ => Some x
+--   end
+--
+-- def List.headIsPositive (xs : List<Int>) : Bool =
+--   match List.head xs with
+--   | None => false -- List is empty, so head is not positive
+--   | Some x => x > 0
+--   end
+--
+-- type Status = | Ok | Err
+-- type Visibility = | Public | Hidden
+--
+-- type Result = {
+--   label : Str,
+--   value : Int,
+--   threshold : Option<Int>,
+--   status : Status,
+--   message : Option<Str>,
+--   visibility : Visibility
+-- }
+--
+-- def exampleResult : Result = {
+--   label = "Example",
+--   value = 10,
+--   threshold = Some 10,
+--   status = Ok,
+--   message = Some "Example output",
+--   visibility = Public
+-- }
+--
+-- /- -/
+--

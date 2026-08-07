@@ -620,9 +620,9 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
     let mut declared : List String := []
     for (cname, _) in cs do
       if declared.contains cname then
-        throwErrorAt dstx s!"Constructor {cname} is defined twice in type {tname}"
+        throwErrorAt dstx s!"Error when defining {tname}: Constructor {cname} is defined twice in type {tname}"
       if env.opMap.contains cname then
-        throwErrorAt dstx s!"Constructor {cname} is already defined"
+        throwErrorAt dstx s!"Error when defining {tname}: Constructor {cname} is already defined"
       declared := cname :: declared
     -- Generate FVar names for the inductive's tyVars; same names are used
     -- across all constructors so that uses of e.g. 'a in arg vs out types
