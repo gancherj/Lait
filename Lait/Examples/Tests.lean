@@ -1,4 +1,15 @@
 import Lait
+import Lait.Examples.Tests1
+
+{lait_decl my_decls
+  #include Tests1
+  -- def bar = baz
+  def bar = foo + 1
+  #eval 42
+  #eval bar
+}
+
+
 #lait
 
 
@@ -37,6 +48,5 @@ def exampleResult : Result = {
   message = Some "Example output",
   visibility = Public
 }
-
 
 /- -/

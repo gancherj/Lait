@@ -197,9 +197,11 @@ def doPass (f : DeclEntry -> List DeclEntry) : List DeclEntry -> List DeclEntry 
     | [] => []
     | d::ds => (f d) ++ doPass f ds
 
-def flattenDecls (d : DeclEntry) : List DeclEntry :=
+/-- Splice `DeclList`s (produced by `#include`) into the surrounding declaration
+list.  Recursive, since an included module may itself contain `#include`s. -/
+partial def flattenDecls (d : DeclEntry) : List DeclEntry :=
   match d.val with
-  | .DeclList ds => ds
+  | .DeclList ds => ds.flatMap flattenDecls
   | _ => [d]
 
 -- The constructor functions for one inductive type: each constructor `C` of

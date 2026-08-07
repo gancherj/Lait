@@ -8,20 +8,44 @@ import Lean.EnvExtension
 
 open Lean Elab Command
 
+/-- Entries *extend* the named module, so a module may be built up over several
+commands (as a `#lait` file is: one command per top-level declaration). -/
 initialize laitExt : SimplePersistentEnvExtension (Name × TSyntaxArray `lait_decl) (NameMap (TSyntaxArray `lait_decl)) ←
   registerSimplePersistentEnvExtension {
     -- applied to entries added in the current file
-    addEntryFn    := fun m (n, s) => m.insert n s
+    addEntryFn    := fun m (n, s) => m.insert n ((m.find? n).getD #[] ++ s)
     -- applied once at import time to entries from all transitive imports
     addImportedFn := fun arrs =>
-      arrs.foldl (fun m arr => arr.foldl (fun m (n, s) => m.insert n s) m) {}
+      arrs.foldl (fun m arr => arr.foldl (fun m (n, s) => m.insert n ((m.find? n).getD #[] ++ s)) m) {}
   }
 
+/-- Append `stx` to the declarations of the Lait module `name`. -/
 def addModule (name : Name) (stx : TSyntaxArray `lait_decl) : CoreM Unit := do
   modifyEnv (laitExt.addEntry · (name, stx))
 
 def getModule (name : Name) : CoreM (Option (TSyntaxArray `lait_decl)) := do
   return (laitExt.getState (← getEnv)).find? name
+
+/-- Results of the `#eval`s of each Lait module, keyed by module name.  Populated
+as the module elaborates, so Lean code after it (or in an importing file) can read
+the outputs back with `getEvalResults`.  As with `laitExt`, entries accumulate. -/
+initialize laitEvalExt : SimplePersistentEnvExtension (Name × Array EvalResult) (NameMap (Array EvalResult)) ←
+  registerSimplePersistentEnvExtension {
+    addEntryFn    := fun m (n, rs) => m.insert n ((m.find? n).getD #[] ++ rs)
+    addImportedFn := fun arrs =>
+      arrs.foldl (fun m arr => arr.foldl (fun m (n, rs) => m.insert n ((m.find? n).getD #[] ++ rs)) m) {}
+  }
+
+/-- Append `rs` to the recorded `#eval` results of the Lait module `name`. -/
+def addEvalResults (name : Name) (rs : Array EvalResult) : CoreM Unit := do
+  modifyEnv (laitEvalExt.addEntry · (name, rs))
+
+/-- The `#eval` results of the Lait module `name`, in declaration order. -/
+def getEvalResults (name : Name) : CoreM (Array EvalResult) := do
+  return ((laitEvalExt.getState (← getEnv)).find? name).getD #[]
+
+def getLastEvalResult (name : Name) : CoreM (Option EvalResult) := do
+  return ((laitEvalExt.getState (← getEnv)).find? name).getD #[] |>.back?
 
 declare_syntax_cat lait_ty
 declare_syntax_cat lait_ty_field
@@ -639,12 +663,30 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
            opMap := om, tyMap := tm, frozen := fr, freshCounter := st.freshCounter
            evalEnv := evalEnv', evalState := evalState' }
 
+/-- Record a failed elaboration of module `name` as an `.error` result, so that
+Lean code reading the module's outputs back (`getEvalResults`,
+`getLastEvalResult`) sees the error instead of a silently missing result.  A
+declaration that fails to elaborate or type-check never runs, so it produces no
+`#eval` output of its own; its error takes that slot. -/
+def recordModuleError (name : Name) (e : Exception) : CommandElabM _root_.Unit := do
+  let ref ← match e with
+    | .error ref _ => pure ref
+    | _ => getRef
+  let msg ← e.toMessageData.toString
+  liftCoreM <| addEvalResults name #[⟨ref, .error msg⟩]
+
 elab "{lait_decl" i:ident d:lait_decl* "}" : command => do
-  let ds ← liftTermElabM <| d.mapM elabLaitDecl
-  -- A `{lait_decl …}` block is a self-contained module: check/run it from a
-  -- fresh context, then store its raw syntax for later `#include`.
-  let _ ← processBatch default ds.toList
-  liftCoreM <| addModule i.getId d
+  try
+    let ds ← liftTermElabM <| d.mapM elabLaitDecl
+    -- A `{lait_decl …}` block is a self-contained module: check/run it from a
+    -- fresh context, then store its raw syntax for later `#include` and the
+    -- `#eval` results it produced for later inspection from Lean.
+    let ctx ← processBatch default ds.toList
+    liftCoreM <| addModule i.getId d
+    liftCoreM <| addEvalResults i.getId ctx.evalState.evalResults
+  catch e =>
+    recordModuleError i.getId e
+    throw e
 
 /-- Walk a parsed Lait command and attach a (deliberately unhandled) `namespaceId`
 completion info over every identifier token.
@@ -661,6 +703,14 @@ partial def suppressLeanCompletions (stx : Syntax) : CommandElabM _root_.Unit :=
   | .node _ _ args => args.forM suppressLeanCompletions
   | _ => pure ⟨⟩
 
+/-- The Lait module name of the file being elaborated: the last component of the
+Lean module name, so the top-level declarations of `Lait/Examples/Tests1.lean`
+form the module `Tests1` and are reachable as `#include Tests1`. -/
+def currentLaitModule : CommandElabM Name := do
+  match ← getMainModule with
+  | .str _ s => return .mkSimple s
+  | m => return m
+
 @[command_elab laitModuleDecl]
 def elabLaitModuleTop : CommandElab := fun stx => do
   -- Attach empty completions over every identifier first, so they survive even when the
@@ -672,14 +722,25 @@ def elabLaitModuleTop : CommandElab := fun stx => do
     let ctx := laitCtxExt.getState (← getEnv)
     let ctx' ← processBatch ctx ds
     modifyEnv (laitCtxExt.setState · ctx')
+    -- The file's top-level declarations form a Lait module named after the file, just
+    -- like the ones written with `{lait_decl …}`: record this command's syntax and the
+    -- `#eval` results it produced, so both can be read back later (`#include`,
+    -- `getEvalResults`).  Each command extends the module in place.
+    let modName ← currentLaitModule
+    liftCoreM <| addModule modName (decls.toArray.map (⟨·⟩))
+    liftCoreM <| addEvalResults modName
+      (ctx'.evalState.evalResults.extract ctx.evalState.evalResults.size)
   catch e =>
     -- A half-typed declaration makes `elabLaitDecl` `throwUnsupportedSyntax`, which would
     -- otherwise make the command framework reset the elaboration state and discard the
     -- completion leaves we just pushed. The parser already reports the syntax error, so we
-    -- swallow that case; all other exceptions propagate normally (and keep the leaves).
+    -- swallow that case; all other exceptions are recorded as a failing result of the
+    -- file's module, then propagate normally (and keep the leaves).
     match e with
     | .internal id _ => if id == unsupportedSyntaxExceptionId then pure ⟨⟩ else throw e
-    | _ => throw e
+    | _ =>
+      recordModuleError (← currentLaitModule) e
+      throw e
 
 --- Parser override
 

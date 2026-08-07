@@ -78,6 +78,25 @@ def Heap.get (h : Heap) (loc : Nat) : Except String Val :=
 def Heap.new : Heap :=
   (0, Std.TreeMap.empty)
 
+/-- The outcome of one `#eval` declaration.  Results are pretty-printed rather
+than kept as `Val`s so that they can be stored in a persistent environment
+extension (and thus survive into the `.olean`, see `laitEvalExt`). -/
+structure EvalResult where
+  /-- Syntax of the `#eval` declaration, for source positions. -/
+  stx : Lean.Syntax
+  /-- The pretty-printed value, or the error message if evaluation failed. -/
+  result : Except String Val
+  deriving Inhabited
+
+
+def EvalResult.pretty (r : EvalResult) : String :=
+  match r.result with
+  | .ok v => v.pretty
+  | .error e => s!"error: {e}"
+
+instance : ToString EvalResult where
+  toString r := r.pretty
+
 structure EvalState where
   heap : Heap
   opMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (String × Lean.Syntax) Val)
@@ -86,6 +105,8 @@ structure EvalState where
   maxSteps : Nat := 8000
   stepsRemaining : Nat := 8000
   logs : List (String) := []
+  /-- Results of the `#eval`s run so far, in declaration order. -/
+  evalResults : Array EvalResult := #[]
 
 def initOpMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (String × Lean.Syntax) Val) :=
   Std.TreeMap.ofList [
@@ -370,9 +391,12 @@ def Decl.eval (d : Decl n m) (env : List Val) : DeclEval (List Val) :=
   | .mk _ (.DeclTypeAlias _ _) => pure env
   | .mk _ (.DeclCheck _) => pure env
   | .mk stx (.DeclEval e) => do
-    match ← DeclEval.scopeExpError stx (Exp.eval env e) with
+    let res ← DeclEval.scopeExpError stx (Exp.eval env e)
+    modify fun st => { st with evalResults := st.evalResults.push ⟨stx, res⟩ }
+    let res := res.map Val.pretty
+    match res with
     | .ok v => do
-      Lean.logInfoAt stx s!"{v.pretty}"
+      Lean.logInfoAt stx v
       pure env
     | .error e => do
       Lean.logErrorAt stx e
