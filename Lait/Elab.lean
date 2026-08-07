@@ -19,12 +19,12 @@ initialize laitExt : SimplePersistentEnvExtension (Name × TSyntaxArray `lait_de
       arrs.foldl (fun m arr => arr.foldl (fun m (n, s) => m.insert n ((m.find? n).getD #[] ++ s)) m) {}
   }
 
+def getModule (name : Name) : CoreM (Option (TSyntaxArray `lait_decl)) := do
+  return (laitExt.getState (← getEnv)).find? name
+
 /-- Append `stx` to the declarations of the Lait module `name`. -/
 def addModule (name : Name) (stx : TSyntaxArray `lait_decl) : CoreM Unit := do
   modifyEnv (laitExt.addEntry · (name, stx))
-
-def getModule (name : Name) : CoreM (Option (TSyntaxArray `lait_decl)) := do
-  return (laitExt.getState (← getEnv)).find? name
 
 /-- Results of the `#eval`s of each Lait module, keyed by module name.  Populated
 as the module elaborates, so Lean code after it (or in an importing file) can read
@@ -676,6 +676,11 @@ def recordModuleError (name : Name) (e : Exception) : CommandElabM _root_.Unit :
   liftCoreM <| addEvalResults name #[⟨ref, .error msg⟩]
 
 elab "{lait_decl" i:ident d:lait_decl* "}" : command => do
+  -- Unlike a `#lait` file (whose declarations extend its module one command at a
+  -- time), a `{lait_decl …}` block defines its module in one shot, so a name that
+  -- is already taken -- here or in an import -- is a genuine duplicate definition.
+  if (← liftCoreM <| getModule i.getId).isSome then
+    throwErrorAt i s!"Module `{i.getId}` already exists"
   try
     let ds ← liftTermElabM <| d.mapM elabLaitDecl
     -- A `{lait_decl …}` block is a self-contained module: check/run it from a
