@@ -1,6 +1,0 @@
-book
-node_modules
-# Browser runtime + stylesheet, regenerated from the leandown checkout by
-# `npm run assets` (see book.toml).
-leandown.js
-leandown.css
