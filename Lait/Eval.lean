@@ -165,9 +165,9 @@ def initOpMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (String ×
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Bool (n1 ≥ n2)))
       | _ => throw (s!"Wrong inputs to >=", stx)
     ),
-    ("num2string", fun stx vs => do
+    ("toString", fun stx vs => do
       match vs with
-      | [Val.VConst (Const.Num n)] => pure (Val.VConst (Const.String (toString n)))
+      | [v] => pure (Val.VConst (Const.String (Val.pretty v)))
       | _ => throw (s!"Wrong inputs to num2string", stx)
     ),
     ("==", fun (stx : Lean.Syntax) (vs : List Val) => do

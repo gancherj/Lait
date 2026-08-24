@@ -332,7 +332,7 @@ def initTcOpMap : Std.TreeMap String OpSig :=
     , ("==", ({ tyVars := [`_laitEqTy]
               , argTys := [Ty.mk .missing (.FVar `_laitEqTy), Ty.mk .missing (.FVar `_laitEqTy)]
               , outTy := Ty.mk .missing .Bool } : OpSig))
-    , ("num2string", ({ tyVars := [], argTys := [Ty.Int], outTy := Ty.mk .missing .Str } : OpSig))
+    , ("toString", ({ tyVars := [`_a], argTys := [Ty.mk .missing (.FVar `_a)], outTy := Ty.mk .missing .Str } : OpSig))
     ]
 
 def initTyMap : Std.TreeMap String TyVal := Std.TreeMap.empty
