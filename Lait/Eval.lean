@@ -42,8 +42,8 @@ partial def Val.eq (stx : Lean.Syntax) (v1 v2 : Val) : Except (String × Lean.Sy
   match v1, v2 with
   | .VConst c1, .VConst c2 => pure (c1 == c2)
   | .VLoc i1, .VLoc i2 => pure (i1 == i2)
-  | .VClosure .., .VClosure .. => throw (s!"Eq: functions", stx)
-  | .VRec .., .VRec .. => throw (s!"Eq: functions", stx)
+  | .VClosure .., .VClosure .. => throw (s!"Equality not supported for functions", stx)
+  | .VRec .., .VRec .. => throw (s!"Equality not supported for functions", stx)
   | .VPair v1 v2, .VPair v1' v2' => do
     let b1 <- v1.eq stx v1'
     let b2 <- v2.eq stx v2'
