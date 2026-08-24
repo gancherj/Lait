@@ -193,7 +193,7 @@ syntax:70 lait_exp:70 lait_exp:71 : lait_exp
 syntax "let" lait_ident ":" lait_ty "=" lait_exp "in" lait_exp : lait_exp
 syntax "let" lait_ident "=" lait_exp "in" lait_exp : lait_exp
 syntax "error" lait_exp : lait_exp
-syntax "print" lait_exp : lait_exp
+syntax "internal_print" lait_exp : lait_exp
 syntax "(" lait_exp "," lait_exp ")" : lait_exp
 syntax "alloc" lait_exp : lait_exp
 syntax:67 "fst" lait_exp:68 : lait_exp
@@ -324,7 +324,7 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | ($e:lait_exp)) => elabLaitExp e
   | `(lait_exp | error $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Error (← elabLaitExp e1))
-  | `(lait_exp | print $e1:lait_exp) => do
+  | `(lait_exp | internal_print $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Print (← elabLaitExp e1))
   | `(lait_exp | $n:num) =>
     mkSurfaceExp e.raw (.Const (.Num (Int.ofNat n.getNat)))

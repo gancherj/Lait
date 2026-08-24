@@ -3,4 +3,6 @@ import Lait
 
 def foo = 1234
 
+#check print
+
 #eval 111

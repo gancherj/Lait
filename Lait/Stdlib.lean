@@ -78,6 +78,8 @@ import Lait.Elab
 
   def toString (n : a) : String = %toString {n}
 
+  def print x = internal_print x
+
   def assert (b : Bool) : Unit =
     if not b then error "Assertion failed" else ()
 
