@@ -85,8 +85,11 @@ syntax "{" lait_ty_field,* "}" : lait_ty
 /--
 The type of mutable references `Ref<t>` to values of type `t`.
 - To create a new mutable reference of type `Ref<t>`, use `alloc e`, where `e` should have type `t`.
-- To read from a mutable reference `r : Ref<t>`, use `!r`.
+- To read from a mutable reference `r : Ref<t>`, use `get r`.
 - To write to a mutable reference `r : Ref<t>`, use `set r e`, where `e` should have type `t`.
+
+`alloc`, `get` and `set` are ordinary standard-library functions, defined in terms of
+the primitives `builtin_alloc`, `builtin_get` and `builtin_set`.
 -/
 syntax "Ref" "<" lait_ty ">" : lait_ty
 
@@ -195,19 +198,23 @@ syntax "let" lait_ident ":=" lait_exp "in" lait_exp : lait_exp
 syntax "error" lait_exp : lait_exp
 syntax "internal_print" lait_exp : lait_exp
 syntax "(" lait_exp "," lait_exp ")" : lait_exp
-syntax "alloc" lait_exp : lait_exp
 syntax:67 "fst" lait_exp:68 : lait_exp
 syntax:67 "snd" lait_exp:68 : lait_exp
-syntax:67 "!" lait_exp:68 : lait_exp
 syntax:67 "not" lait_exp:68 : lait_exp
 syntax "match" lait_exp "with" lait_match_arm* "end" : lait_exp
 syntax "if" lait_exp "then" lait_exp "else" lait_exp : lait_exp
 syntax "try" lait_exp "with" lait_exp "end" : lait_exp
--- The primitive write to a mutable reference.  The stdlib wraps it as the
--- ordinary function `set : forall a. Ref<a> -> a -> Unit`.
+-- The primitive operations on mutable references.  The stdlib wraps each as an
+-- ordinary function, so `alloc`/`get`/`set` are plain identifiers rather than
+-- reserved syntax:
+--   alloc : forall a. a -> Ref<a>
+--   get   : forall a. Ref<a> -> a
+--   set   : forall a. Ref<a> -> a -> Unit
+syntax "builtin_alloc" "(" lait_exp ")" : lait_exp
+syntax "builtin_get" "(" lait_exp ")" : lait_exp
 syntax "builtin_set" "(" lait_exp "," lait_exp ")" : lait_exp
 -- Infix operators, stratified by precedence (all left-associative, and all
--- below `fst`/`snd`/`!` at 67 and application at 70 so those bind tighter):
+-- below `fst`/`snd`/`not` at 67 and application at 70 so those bind tighter):
 --   *            62   (multiplication, tightest)
 --   + ++         60   (additive)
 --   < > <= >= == 55   (comparison / equality)
@@ -364,9 +371,9 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
     mkSurfaceExp e.raw (.Let name none val body)
   | `(lait_exp | ($e1:lait_exp, $e2:lait_exp)) => do
     mkSurfaceExp e.raw (.Pair (← elabLaitExp e1) (← elabLaitExp e2))
-  | `(lait_exp | alloc $e1:lait_exp) => do
+  | `(lait_exp | builtin_alloc($e1:lait_exp)) => do
     mkSurfaceExp e.raw (.Alloc (← elabLaitExp e1))
-  | `(lait_exp | ! $e1:lait_exp) => do
+  | `(lait_exp | builtin_get($e1:lait_exp)) => do
     mkSurfaceExp e.raw (.Deref (← elabLaitExp e1))
   | `(lait_exp | builtin_set($e1:lait_exp, $e2:lait_exp)) => do
     mkSurfaceExp e.raw (.Assign (← elabLaitExp e1) (← elabLaitExp e2))
@@ -435,8 +442,8 @@ elab "{lait_exp" e:lait_exp "}" : term => do
 #check {lait_exp  let x := 1 in x}
 #check {lait_exp  let x : Int := 1 in x}
 #check {lait_exp  (fun x => x) 1}
-#check {lait_exp  alloc 1}
-#check {lait_exp  get x}
+#check {lait_exp  builtin_alloc(1)}
+#check {lait_exp  builtin_get(x)}
 #check {lait_exp  builtin_set(x, 1)}
 -/
 

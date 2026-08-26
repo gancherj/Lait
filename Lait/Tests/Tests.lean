@@ -79,11 +79,11 @@ import Lait.Elab
   #eval "hi" == "hi"                                     -- true
 
 
-  def r := alloc 32
+  def r := builtin_alloc(32)
 
-  def _ := builtin_set(r, (!r) + 1)
+  def _ := builtin_set(r, builtin_get(r) + 1)
 
-  #eval !r
+  #eval builtin_get(r)
 
   -- =============== Let bindings (monomorphic, like plzoo poly) ===============
   def usingLet := let x := 10 in x + 1
@@ -125,18 +125,18 @@ import Lait.Elab
 
 
   -- =============== References / mutation ===============
-  def r := alloc 100
-  #eval !r
+  def r := builtin_alloc(100)
+  #eval builtin_get(r)
   def doAssign := builtin_set(r, 200)
-  #eval !r                                             -- 200
-  #eval !r + 1                                         -- 201
+  #eval builtin_get(r)                                 -- 200
+  #eval builtin_get(r) + 1                             -- 201
 
   -- Polymorphic ref creator: forall a. a -> Ref a
-  def cell := fun x => alloc x
+  def cell := fun x => builtin_alloc(x)
   def rNum := cell 5
   def rStr := cell "stored"
-  #eval !rNum                                          -- 5
-  #eval !rStr                                          -- "stored"
+  #eval builtin_get(rNum)                              -- 5
+  #eval builtin_get(rStr)                              -- "stored"
 
 
   -- =============== Explicit type annotation on def (monomorphic) ===============

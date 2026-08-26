@@ -76,8 +76,16 @@ import Lait.Elab
       end
     end
 
-  -- Write `x` into the mutable reference `r`, wrapping the primitive
-  -- `builtin_set` as an ordinary (curried) function.
+  -- The mutable-reference operations, each wrapping the corresponding primitive
+  -- as an ordinary (curried) function.
+
+  -- Allocate a fresh reference holding `x`.
+  def alloc (x : a) : Ref<a> := builtin_alloc(x)
+
+  -- Read the current contents of the reference `r`.
+  def get (r : Ref<a>) : a := builtin_get(r)
+
+  -- Write `x` into the reference `r`.
   def set (r : Ref<a>) (x : a) : Unit := builtin_set(r, x)
 
   def toString (n : a) : String := %toString {n}
