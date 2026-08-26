@@ -86,7 +86,7 @@ syntax "{" lait_ty_field,* "}" : lait_ty
 The type of mutable references `Ref<t>` to values of type `t`.
 - To create a new mutable reference of type `Ref<t>`, use `alloc e`, where `e` should have type `t`.
 - To read from a mutable reference `r : Ref<t>`, use `!r`.
-- To write to a mutable reference `r : Ref<t>`, use `r := e`, where `e` should have type `t`.
+- To write to a mutable reference `r : Ref<t>`, use `set r e`, where `e` should have type `t`.
 -/
 syntax "Ref" "<" lait_ty ">" : lait_ty
 
@@ -190,8 +190,8 @@ syntax "()" : lait_exp
 syntax "fun" lait_ident "=>" lait_exp : lait_exp
 syntax "fun" lait_typed_var "=>" lait_exp : lait_exp
 syntax:70 lait_exp:70 lait_exp:71 : lait_exp
-syntax "let" lait_ident ":" lait_ty "=" lait_exp "in" lait_exp : lait_exp
-syntax "let" lait_ident "=" lait_exp "in" lait_exp : lait_exp
+syntax "let" lait_ident ":" lait_ty ":=" lait_exp "in" lait_exp : lait_exp
+syntax "let" lait_ident ":=" lait_exp "in" lait_exp : lait_exp
 syntax "error" lait_exp : lait_exp
 syntax "internal_print" lait_exp : lait_exp
 syntax "(" lait_exp "," lait_exp ")" : lait_exp
@@ -203,7 +203,9 @@ syntax:67 "not" lait_exp:68 : lait_exp
 syntax "match" lait_exp "with" lait_match_arm* "end" : lait_exp
 syntax "if" lait_exp "then" lait_exp "else" lait_exp : lait_exp
 syntax "try" lait_exp "with" lait_exp "end" : lait_exp
-syntax lait_exp ":=" lait_exp : lait_exp
+-- The primitive write to a mutable reference.  The stdlib wraps it as the
+-- ordinary function `set : forall a. Ref<a> -> a -> Unit`.
+syntax "builtin_set" "(" lait_exp "," lait_exp ")" : lait_exp
 -- Infix operators, stratified by precedence (all left-associative, and all
 -- below `fst`/`snd`/`!` at 67 and application at 70 so those bind tighter):
 --   *            62   (multiplication, tightest)
@@ -230,7 +232,7 @@ syntax "|" "[]" "=>" lait_exp : lait_match_arm
 syntax "|" lait_ident "::" lait_ident "=>" lait_exp : lait_match_arm
 syntax "|" "_" "=>" lait_exp : lait_match_arm
 syntax lait_exp "^" ident : lait_exp
-syntax ident "=" lait_exp : lait_field
+syntax ident ":=" lait_exp : lait_field
 syntax "{" lait_field,* "}" : lait_exp
 syntax "%" ident "{" lait_exp,* "}" : lait_exp
 syntax "[]" : lait_exp
@@ -297,7 +299,7 @@ partial def elabLaitMatchArm (a : Lean.TSyntax `lait_match_arm) : TermElabM (Sum
 
 partial def elabLaitField (f : Lean.TSyntax `lait_field) : TermElabM (_root_.String × Surface.Exp) :=
   match f with
-  | `(lait_field | $id:ident = $e:lait_exp) => do
+  | `(lait_field | $id:ident := $e:lait_exp) => do
     let e ← elabLaitExp e
     pure (id.getId.toString, e)
   | _ => throwUnsupportedSyntax
@@ -349,13 +351,13 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | % $id:ident {$es:lait_exp,*}) => do
     let es <- es.getElems.mapM elabLaitExp
     mkSurfaceExp e.raw (.Op id.getId.toString es.toList)
-  | `(lait_exp | let $id:lait_ident : $t:lait_ty = $e1:lait_exp in $e2:lait_exp) => do
+  | `(lait_exp | let $id:lait_ident : $t:lait_ty := $e1:lait_exp in $e2:lait_exp) => do
     let name ← elabLaitIdent id
     let ty ← elabLaitTy t
     let val ← elabLaitExp e1
     let body ← elabLaitExp e2
     mkSurfaceExp e.raw (.Let name (some ty) val body)
-  | `(lait_exp | let $id:lait_ident = $e1:lait_exp in $e2:lait_exp) => do
+  | `(lait_exp | let $id:lait_ident := $e1:lait_exp in $e2:lait_exp) => do
     let name ← elabLaitIdent id
     let val ← elabLaitExp e1
     let body ← elabLaitExp e2
@@ -366,7 +368,7 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
     mkSurfaceExp e.raw (.Alloc (← elabLaitExp e1))
   | `(lait_exp | ! $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Deref (← elabLaitExp e1))
-  | `(lait_exp | $e1:lait_exp := $e2:lait_exp) => do
+  | `(lait_exp | builtin_set($e1:lait_exp, $e2:lait_exp)) => do
     mkSurfaceExp e.raw (.Assign (← elabLaitExp e1) (← elabLaitExp e2))
   | `(lait_exp | $e1:lait_exp * $e2:lait_exp) => mkLaitInfix e.raw "*" e1 e2
   | `(lait_exp | $e1:lait_exp + $e2:lait_exp) => mkLaitInfix e.raw "+" e1 e2
@@ -430,12 +432,12 @@ elab "{lait_exp" e:lait_exp "}" : term => do
 #check {lait_exp  fun (x : Int) => x}
 #check {lait_exp  (1, 2)}
 #check {lait_exp  ()}
-#check {lait_exp  let x = 1 in x}
-#check {lait_exp  let x : Int = 1 in x}
+#check {lait_exp  let x := 1 in x}
+#check {lait_exp  let x : Int := 1 in x}
 #check {lait_exp  (fun x => x) 1}
 #check {lait_exp  alloc 1}
 #check {lait_exp  get x}
-#check {lait_exp  x := 1}
+#check {lait_exp  builtin_set(x, 1)}
 -/
 
 end LaitSurface
@@ -448,25 +450,25 @@ declare_syntax_cat lait_def_kw
 
 /--
 Define a top-level value or function.
-- `def x = e` binds `x` to the value of `e`; an optional type may be given with `def x : T = e`.
-- `def f param_1 ... param_n = e` defines a function. Each `param` is either a bare identifier (e.g., `x`);
+- `def x := e` binds `x` to the value of `e`; an optional type may be given with `def x : T := e`.
+- `def f param_1 ... param_n := e` defines a function. Each `param` is either a bare identifier (e.g., `x`);
 an identifier annotated with a type `(x : T)`, or `()` (standing for a parameter of type `Unit`).
 - You can create mutually recursive functions using `and`, like so:
 ```
-def isEven (n : Int) =
+def isEven (n : Int) :=
   if n == 0 then true else isOdd (n - 1)
-and isOdd (n : Int) =
+and isOdd (n : Int) :=
   if n == 0 then false else isEven (n - 1)
 ```
 -/
 syntax "def" : lait_def_kw
 
 
-syntax lait_def_kw lait_ident "=" lait_exp : lait_decl
+syntax lait_def_kw lait_ident ":=" lait_exp : lait_decl
 
-syntax lait_def_kw lait_ident ":" lait_ty "=" lait_exp : lait_decl
-syntax "type" ident "=" lait_ty : lait_decl
-syntax "type" ident "<" ident,* ">" "=" lait_ty : lait_decl
+syntax lait_def_kw lait_ident ":" lait_ty ":=" lait_exp : lait_decl
+syntax "type" ident ":=" lait_ty : lait_decl
+syntax "type" ident "<" ident,* ">" ":=" lait_ty : lait_decl
 
 -- Function and (inductive) type definitions.  Two or more clauses linked with
 -- `and` form a mutually-recursive group; a single clause (no `and`) is the
@@ -474,11 +476,11 @@ syntax "type" ident "<" ident,* ">" "=" lait_ty : lait_decl
 -- separate `and`-only rule sharing the `def`/`type` prefix.
 declare_syntax_cat lait_and_def
 declare_syntax_cat lait_and_type
-syntax "and" lait_ident lait_param+ (":" lait_ty)? "=" lait_exp : lait_and_def
+syntax "and" lait_ident lait_param+ (":" lait_ty)? ":=" lait_exp : lait_and_def
 
-syntax lait_def_kw lait_ident lait_param+ (":" lait_ty)? "=" lait_exp lait_and_def* : lait_decl
-syntax "and" ident ("<" ident,* ">")? "=" lait_inductive_constr* : lait_and_type
-syntax "type" ident ("<" ident,* ">")? "=" lait_inductive_constr* lait_and_type* : lait_decl
+syntax lait_def_kw lait_ident lait_param+ (":" lait_ty)? ":=" lait_exp lait_and_def* : lait_decl
+syntax "and" ident ("<" ident,* ">")? ":=" lait_inductive_constr* : lait_and_type
+syntax "type" ident ("<" ident,* ">")? ":=" lait_inductive_constr* lait_and_type* : lait_decl
 
 syntax "|" ident lait_typed_var* : lait_inductive_constr
 /--
@@ -544,33 +546,33 @@ partial def elabLaitDeclList (included : IO.Ref NameSet) (ds : Lean.TSyntaxArray
 partial def elabLaitDecl (included : IO.Ref NameSet) (d : Lean.TSyntax `lait_decl) :
     TermElabM Surface.DeclEntry :=
   match d with
-  | `(lait_decl | def $id:lait_ident = $e:lait_exp) => do
+  | `(lait_decl | def $id:lait_ident := $e:lait_exp) => do
     let name ← elabLaitIdent id
     let e ← elabLaitExp e
     mkSurfaceDeclEntry id.raw (.DeclEntryDef name none e)
-  | `(lait_decl | def $id:lait_ident : $t:lait_ty = $e:lait_exp) => do
+  | `(lait_decl | def $id:lait_ident : $t:lait_ty := $e:lait_exp) => do
     let name ← elabLaitIdent id
     let ty ← elabLaitTy t
     let e ← elabLaitExp e
     mkSurfaceDeclEntry id.raw (.DeclEntryDef name (some ty) e)
-  | `(lait_decl | def $id:lait_ident $args:lait_param* $[: $t:lait_ty]? = $e:lait_exp $ands:lait_and_def*) => do
+  | `(lait_decl | def $id:lait_ident $args:lait_param* $[: $t:lait_ty]? := $e:lait_exp $ands:lait_and_def*) => do
     let first ← elabLaitDefClause id.raw id args t e
     let rest ← ands.mapM fun a => match a with
-      | `(lait_and_def | and $id:lait_ident $args:lait_param* $[: $t:lait_ty]? = $e:lait_exp) =>
+      | `(lait_and_def | and $id:lait_ident $args:lait_param* $[: $t:lait_ty]? := $e:lait_exp) =>
           elabLaitDefClause id.raw id args t e
       | _ => throwUnsupportedSyntax
     mkSurfaceDeclEntry id.raw (.DeclEntryDefMutual (first :: rest.toList))
-  | `(lait_decl | type $id:ident = $t:lait_ty) => do
+  | `(lait_decl | type $id:ident := $t:lait_ty) => do
     if Bool.not (<- firstCharUpper id) then do throwErrorAt d.raw "Declared types must begin with an upper-case letter"
     let ty ← elabLaitTy t
     mkSurfaceDeclEntry d.raw (.DeclEntryTypeAlias id.getId.toString List.nil ty)
-  | `(lait_decl | type $id:ident < $ts:ident,* > = $t:lait_ty) => do
+  | `(lait_decl | type $id:ident < $ts:ident,* > := $t:lait_ty) => do
     if Bool.not (<- firstCharUpper id) then do throwErrorAt d.raw "Declared types must begin with an upper-case letter"
     if (<- ts.getElems.toList.anyM firstCharUpper) then do throwErrorAt d.raw "Type parameters must begin with a lower-case letter"
     let ty ← elabLaitTy t
     let tvars := ts.getElems.toList.map fun id => id.getId.toString
     mkSurfaceDeclEntry d.raw (.DeclEntryTypeAlias id.getId.toString tvars ty)
-  | `(lait_decl | type $id:ident $[< $ts:ident,* >]? = $cs:lait_inductive_constr* $ands:lait_and_type*) => do
+  | `(lait_decl | type $id:ident $[< $ts:ident,* >]? := $cs:lait_inductive_constr* $ands:lait_and_type*) => do
     let elabClause (stx : Syntax) (id : Ident) (ts : Option (Lean.Syntax.TSepArray `ident ","))
         (cs : TSyntaxArray `lait_inductive_constr) :
         TermElabM (_root_.String × List _root_.String × List (_root_.String × List (_root_.String × Surface.Ty))) := do
@@ -580,7 +582,7 @@ partial def elabLaitDecl (included : IO.Ref NameSet) (d : Lean.TSyntax `lait_dec
       elabLaitInductiveTuple id tvars cs
     let first ← elabClause d.raw id ts cs
     let rest ← ands.mapM fun a => match a with
-      | `(lait_and_type | and $id:ident $[< $ts:ident,* >]? = $cs:lait_inductive_constr*) =>
+      | `(lait_and_type | and $id:ident $[< $ts:ident,* >]? := $cs:lait_inductive_constr*) =>
           elabClause a id ts cs
       | _ => throwUnsupportedSyntax
     mkSurfaceDeclEntry d.raw (.DeclEntryMutualTypes (first :: rest.toList))

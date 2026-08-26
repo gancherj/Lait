@@ -1,9 +1,9 @@
 import Lait.Elab
 
 {lait_decl tst2
-  def blah = 32
+  def blah := 32
 
-  def forever = fix f. fun (_ : Unit) => f ()
+  def forever := fix f. fun (_ : Unit) => f ()
 
   #test_error forever () ~ "Step limit exceeded"
 
@@ -13,9 +13,9 @@ import Lait.Elab
   #include tst2
   #eval blah
 
-  def blah = true
+  def blah := true
 
-  def foo = blah
+  def foo := blah
   #include tst2
 
   #eval foo
@@ -24,12 +24,13 @@ import Lait.Elab
 }
 
 {lait_decl tst3
-  type List<a> = | Nil | Cons (h : a) (t : List<a>)
+  type List<a> := | Nil | Cons (h : a) (t : List<a>)
 
-  def length (xs : List<a>) : Int =
+  def length (xs : List<a>) : Int :=
     match xs with
     | Nil => 0
     | Cons h t => 1 + length t
+    end
 
 
   -- Needs to be better printed, but shows:
