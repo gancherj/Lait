@@ -20,6 +20,9 @@ type Tree :=
   | Leaf (v : Int)
   | Node (t1 : Tree) (t2 : Tree)
 
+def fib := fix f. fun n => if n < 2 then 1 else f (n - 1) + f (n - 2)
+#eval fib 17
+
 def test := Node (Node (Leaf 1) (Leaf 2)) (Leaf 3)
 
 def testList := Cons 1 (Cons 2 [])

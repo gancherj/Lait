@@ -116,8 +116,8 @@ structure EvalState where
   opMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (String × Lean.Syntax) Val)
   timeout : UInt32 := 3000
   /-- Interpreter steps per top-level evaluation (`Exp.eval`, `Val.whnf`, `Val.apply`). -/
-  maxSteps : Nat := 8000
-  stepsRemaining : Nat := 8000
+  maxSteps : Nat := 100000
+  stepsRemaining : Nat := 100000
   logs : List (String) := []
   /-- Results of the `#eval`s run so far, in declaration order. -/
   evalResults : Array EvalResult := #[]
