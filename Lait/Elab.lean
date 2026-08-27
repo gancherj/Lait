@@ -678,7 +678,11 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     let decl' : Decl ctx.n vars'.length := ctx.hvars ▸ decl
     let startEnv : TcEnv ctx.n :=
       { opMap := ctx.opMap, tyMap := ctx.tyMap, curSyntax := (← getRef)
-        frozen := ctx.frozen, varMap := ctx.varMap }
+        frozen := ctx.frozen, varMap := ctx.varMap
+        -- `vars` is exactly the list of top-level `def` names accumulated so
+        -- far, so the type checker's uniqueness check needs no extra state
+        -- beyond the language's built-in names.
+        defNames := ctx.vars.foldl (fun s v => s.insert v) initDefNames }
     -- The continuation runs at the final depth, so it sees the fully-extended
     -- typing environment (all defs/types of this batch in scope).
     let capture : Check vars'.length

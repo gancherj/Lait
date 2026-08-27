@@ -10,16 +10,15 @@ type Tree :=
 
 def test := Node (Node (Leaf 1) (Leaf 2)) (Leaf 3)
 
-def test := Cons 1 (Cons 2 [])
+def testList := Cons 1 (Cons 2 [])
 
-#eval test
+#eval testList
 
 #eval "hi"
 
 #eval
-  let _ := print "hi2" in
-  let _ := print "there2" in
-  ()
+  let true := 42 in
+  true
 
 
 #eval 111

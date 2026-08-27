@@ -125,11 +125,11 @@ import Lait.Elab
 
 
   -- =============== References / mutation ===============
-  def r := builtin_alloc(100)
-  #eval builtin_get(r)
-  def doAssign := builtin_set(r, 200)
-  #eval builtin_get(r)                                 -- 200
-  #eval builtin_get(r) + 1                             -- 201
+  def r2 := builtin_alloc(100)
+  #eval builtin_get(r2)
+  def doAssign := builtin_set(r2, 200)
+  #eval builtin_get(r2)                                -- 200
+  #eval builtin_get(r2) + 1                            -- 201
 
   -- Polymorphic ref creator: forall a. a -> Ref a
   def cell := fun x => builtin_alloc(x)

@@ -13,9 +13,11 @@ import Lait.Elab
   #include tst2
   #eval blah
 
-  def blah := true
+  def blah2 := true
 
-  def foo := blah
+  def foo := blah2
+  -- Including `tst2` again is a no-op: were its declarations spliced in twice,
+  -- `blah` would be a duplicate top-level definition.
   #include tst2
 
   #eval foo

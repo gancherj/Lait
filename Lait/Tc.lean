@@ -17,6 +17,9 @@ inductive TyVal where
   -- declaration order), used for `match` exhaustiveness checking.
   | Inductive : Nat -> List String -> TyVal
   | Alias : TyScheme -> TyVal
+  -- A primitive type (`Int`, `Bool`, ...).  Carries nothing: these have their own
+  -- `TyX` constructors, so the entry exists only to reserve the name.
+  | Builtin : TyVal
 
 structure TcEnv (n : Nat) where
   opMap : Std.TreeMap String OpSig
@@ -30,6 +33,11 @@ structure TcEnv (n : Nat) where
   -- Running union of `Ty.fvars` over every in-scope binding's scheme, maintained
   -- incrementally by `withVar` so that `envFVars` is O(1).
   frozen : Lean.NameSet
+  -- The names bound by top-level `def`s so far (including the defs generated for
+  -- inductive constructors).  A top-level definition may not shadow an existing
+  -- one, so `withDefName` rejects a repeat; `let`/`fun`/`match` binders go
+  -- through `withVar` and may still shadow freely.
+  defNames : Std.TreeSet String
 
 abbrev Constraint := Lean.Syntax × TyX 0 × TyX 0
 
@@ -85,6 +93,7 @@ partial def normalizeTyX (stx : Lean.Syntax) (t : TyX k) : Check n (TyX k) :=
         | some (.Inductive arity _) => do
           if arity == ts.length then pure (.TApp s ts)
           else throwErrorAt stx s!"Wrong number of arguments to {s}"
+        | some .Builtin => throwErrorAt stx s!"{s} is a built-in type and takes no arguments"
         | none => throwErrorAt stx s!"Unknown type constructor: {s}"
 end
 
@@ -108,8 +117,32 @@ def withVar (ty : TyScheme) (k : Check (n + 1) α) : Check n α := fun env =>
     tyMap := env.tyMap,
     curSyntax := env.curSyntax,
     frozen := env.frozen.union (Ty.fvars ty.ty),
-    varMap := env.varMap.cons ty
+    varMap := env.varMap.cons ty,
+    defNames := env.defNames
   }
+
+-- Top-level names are unique, so re-defining one is an error rather than
+-- shadowing.  Checked before the body is inferred, so that a duplicate is
+-- reported instead of whatever errors the (now unreachable) body may contain.
+-- `_` is a wildcard, not a name, so it never clashes.
+def checkDefNameFresh (stx : Lean.Syntax) (name : String) : Check n Unit := do
+  if name != "_" && (← read).defNames.contains name then
+    throwErrorAt stx s!"{name} is already defined"
+
+-- Bind a top-level `def`.
+def withDefName (stx : Lean.Syntax) (name : String) (ty : TyScheme)
+    (k : Check (n + 1) α) : Check n α := do
+  checkDefNameFresh stx name
+  withReader (fun env => { env with defNames := env.defNames.insert name })
+    (withVar ty k)
+
+-- Type names are unique too: a `type` declaration may not re-declare a type
+-- introduced by an earlier declaration, nor a primitive one -- `initTyMap` seeds
+-- `tyMap` with those (`lait_ty` also lexes them as keywords, so in practice the
+-- parser rejects them before we get here).
+def checkTyNameFresh (stx : Lean.Syntax) (tname : String) : Check n Unit := do
+  if (← read).tyMap.contains tname then
+    throwErrorAt stx s!"Type {tname} is already defined"
 
 def TyScheme.mono (t : Ty 0) : TyScheme := { tyVars := [], ty := t }
 
@@ -335,7 +368,29 @@ def initTcOpMap : Std.TreeMap String OpSig :=
     , ("toString", ({ tyVars := [`_a], argTys := [Ty.mk .missing (.FVar `_a)], outTy := Ty.mk .missing .Str } : OpSig))
     ]
 
-def initTyMap : Std.TreeMap String TyVal := Std.TreeMap.empty
+-- The primitive types.  Listing them here keeps them out of reach of `type`
+-- declarations (`checkTyNameFresh`) and, like the entries above, they are part of
+-- every Lait program's starting environment.
+def initTyMap : Std.TreeMap String TyVal :=
+  Std.TreeMap.ofList
+    [ ("Int", TyVal.Builtin)
+    , ("Bool", TyVal.Builtin)
+    , ("String", TyVal.Builtin)
+    , ("Unit", TyVal.Builtin)
+    , ("Ref", TyVal.Builtin)
+    ]
+
+-- The term-level names built into the language: the boolean literals, the
+-- unary primitives, and the reference primitives.  All of them are `lait_exp`
+-- syntax rather than definitions (see `Lait/Elab.lean`), so a `def` of the same
+-- name could never be referred to; `checkDefNameFresh` rejects it instead of
+-- letting it be silently unusable.
+def initDefNames : Std.TreeSet String :=
+  Std.TreeSet.ofList
+    [ "true", "false"
+    , "fst", "snd", "not"
+    , "builtin_alloc", "builtin_get", "builtin_set"
+    ]
 
 -- Given a constructor name, return its owning inductive type's name together
 -- with that type's full set of constructor names.  Used to check `match`
@@ -354,6 +409,12 @@ def ctorTypeInfo (cname : String) (stx : Lean.Syntax) :
     | _ => throwErrorAt stx s!"Constructor {cname} does not belong to an inductive type"
 
 -- ---- Inference (constraint generation) ----
+
+def checkBannedLetName (stx : Lean.Syntax) (n : String) : Check m Unit := do
+  match n with
+  | "true" | "false" => throwErrorAt stx s!"Cannot redefine {n} here"
+  | _ => pure ()
+
 
 def Exp.stx : Exp 0 m → Lean.Syntax
   | .mk stx _ => stx
@@ -382,7 +443,8 @@ mutual
         let r ← freshTy stx
         addConstraint stx t1 (.mk stx (.Arrow t2 r))
         pure r
-      | .mk stx (.Let _ oty e1 e2) => do
+      | .mk stx (.Let n oty e1 e2) => do
+        checkBannedLetName stx n
         let t1 ← Exp.infer e1
         match oty with
         | none => pure ()
@@ -564,10 +626,11 @@ def withSolveAll (k : Check n α) : Check n (NameMap (TyX 0) × α) := do
 partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check n α
   | _, _, .mk _ .DeclNil, k => k
   | _, _, .mk _ (.DeclConcat d1 d2), k => Decl.check d1 (Decl.check d2 k)
-  | _, _, .mk dstx (.DeclDef _ tvars oty e), k => do
+  | _, _, .mk dstx (.DeclDef name tvars oty e), k => do
     -- Open the type variables of the scheme with skolem FVars that keep the
     -- user-written names, so hovers inside the body show e.g. `k`/`v`.
     if tvars.hasDup then throwErrorAt dstx s!"Duplicate type variable in declaration"
+    checkDefNameFresh dstx name
     let (σ, skolems) ← namedSubst tvars
     let e' := Exp.substTy σ e
     let oty' : Option (Ty 0) := oty.map (Ty.subst σ)
@@ -589,7 +652,7 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
                       -- they'll be generalized naturally.
     let scheme := Ty.generalize envFV finalTy
     Check.runMetaM (addHoverInfo dstx s!"{scheme.pretty}")
-    withVar scheme k
+    withDefName dstx name scheme k
   | _, _, .mk _ (.DeclEval e), k => do
     let _ ← withSolveAll (Exp.infer e)
     k
@@ -609,13 +672,15 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
     let scheme := Ty.generalize envFV t
     logInfoAt stx s!"{scheme.pretty}"
     k
-  | _, _, .mk _ (.DeclTypeAlias tname alias), k => do
+  | _, _, .mk dstx (.DeclTypeAlias tname alias), k => do
+    checkTyNameFresh dstx tname
     let _ <- normalizeTy alias.ty
     withReader (fun env => { env with tyMap := env.tyMap.insert tname (.Alias alias) }) k
   | _, _, .mk dstx (.DeclInductive tname tvars cs), k => do
     -- Constructor names must be globally unique: reject re-defining an existing
     -- operator/constructor, or repeating a name within this declaration, so we
     -- never silently overwrite an `opMap` entry.
+    checkTyNameFresh dstx tname
     let env ← read
     let mut declared : List String := []
     for (cname, _) in cs do
