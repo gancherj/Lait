@@ -16,9 +16,4 @@ def testList := Cons 1 (Cons 2 [])
 
 #eval "hi"
 
-#eval
-  let true := 42 in
-  true
-
-
 #eval 111

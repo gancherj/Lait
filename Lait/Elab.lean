@@ -8,9 +8,17 @@ import Lean.EnvExtension
 
 open Lean Elab Command
 
+/-- One stored declaration of a Lait module: its syntax, plus the source location it was
+written at.  The location is resolved when the declaration is stored, i.e. in the file that
+defines it -- a module may be `#include`d from any other file, where the positions carried
+by `stx` mean nothing (see the `#include` case of `elabLaitDecl`). -/
+structure LaitStoredDecl where
+  stx : TSyntax `lait_decl
+  loc? : Option DeclarationLocation
+
 /-- Entries *extend* the named module, so a module may be built up over several
 commands (as a `#lait` file is: one command per top-level declaration). -/
-initialize laitExt : SimplePersistentEnvExtension (Name × TSyntaxArray `lait_decl) (NameMap (TSyntaxArray `lait_decl)) ←
+initialize laitExt : SimplePersistentEnvExtension (Name × Array LaitStoredDecl) (NameMap (Array LaitStoredDecl)) ←
   registerSimplePersistentEnvExtension {
     -- applied to entries added in the current file
     addEntryFn    := fun m (n, s) => m.insert n ((m.find? n).getD #[] ++ s)
@@ -19,12 +27,12 @@ initialize laitExt : SimplePersistentEnvExtension (Name × TSyntaxArray `lait_de
       arrs.foldl (fun m arr => arr.foldl (fun m (n, s) => m.insert n ((m.find? n).getD #[] ++ s)) m) {}
   }
 
-def getModule (name : Name) : CoreM (Option (TSyntaxArray `lait_decl)) := do
+def getModule (name : Name) : CoreM (Option (Array LaitStoredDecl)) := do
   return (laitExt.getState (← getEnv)).find? name
 
-/-- Append `stx` to the declarations of the Lait module `name`. -/
-def addModule (name : Name) (stx : TSyntaxArray `lait_decl) : CoreM Unit := do
-  modifyEnv (laitExt.addEntry · (name, stx))
+/-- Append `ds` to the declarations of the Lait module `name`. -/
+def addModule (name : Name) (ds : Array LaitStoredDecl) : CoreM Unit := do
+  modifyEnv (laitExt.addEntry · (name, ds))
 
 /-- Results of the `#eval`s of each Lait module, keyed by module name.  Populated
 as the module elaborates, so Lean code after it (or in an importing file) can read
@@ -100,9 +108,6 @@ open Lean Parser
 
 open Lean Elab Meta Command
 
-
-def Lean.Syntax.strip (stx : Syntax) : Syntax :=
-  Syntax.ofRange (stx.getRange?.getD default)
 
 def mkSurfaceTy (stx : Lean.Syntax) (x : Surface.TyX) : TermElabM Surface.Ty :=
   pure (.mk stx.strip x)
@@ -543,15 +548,20 @@ partial def elabLaitInductiveTuple (id : Ident) (tvars : List Ident) (cs : TSynt
     let cs' := cs.toList.map fun (cname, args) => (cname.getId.toString, args)
     pure (id.getId.toString, tvars.map (·.getId.toString), cs')
 
-mutual
-/-- `included` tracks the Lait modules already spliced in by `#include`, making
-`#include` idempotent; see the `#include` case of `elabLaitDecl`. -/
-partial def elabLaitDeclList (included : IO.Ref NameSet) (ds : Lean.TSyntaxArray `lait_decl) :
-    TermElabM (List Surface.DeclEntry) :=
-  ds.toList.mapM (elabLaitDecl included)
+/-- What `#include` accumulates while a command elaborates. -/
+structure IncludeState where
+  /-- The Lait modules already spliced in, making `#include` idempotent; see the
+  `#include` case of `elabLaitDecl`. -/
+  included : NameSet := {}
+  /-- Where each spliced-in top-level name was defined; see `TcEnv.defLocs`. -/
+  defLocs : Std.TreeMap _root_.String DeclarationLocation := {}
 
-partial def elabLaitDecl (included : IO.Ref NameSet) (d : Lean.TSyntax `lait_decl) :
-    TermElabM Surface.DeclEntry :=
+partial def elabLaitDecl (st : IO.Ref IncludeState) (d : Lean.TSyntax `lait_decl) :
+    TermElabM Surface.DeclEntry := do
+  -- Covers the parts of the declaration that get no hover of their own, so that clicking
+  -- them does not jump into Lait's implementation.  Declarations spliced in by `#include`
+  -- have no positions here and are skipped.
+  suppressGoToDefinition d.raw
   match d with
   | `(lait_decl | def $id:lait_ident := $e:lait_exp) => do
     let name ← elabLaitIdent id
@@ -613,18 +623,27 @@ partial def elabLaitDecl (included : IO.Ref NameSet) (d : Lean.TSyntax `lait_dec
     -- includes `stdlib`) would re-declare stdlib's types and be rejected as a
     -- duplicate definition.
     let m := e.getId
-    if (<- included.get).contains m then
+    if (<- st.get).included.contains m then
       mkSurfaceDeclEntry d.raw (.DeclList List.nil)
     else
       match (<- getModule m) with
-      | some stx => do
+      | some ds => do
          -- Marked as included *before* recursing, so an include cycle terminates.
-         included.modify (·.insert m)
-         let ds <- elabLaitDeclList included stx
+         st.modify fun s => { s with included := s.included.insert m }
+         let ds <- ds.toList.mapM fun sd => do
+           -- The stored syntax was written in another file, so its positions are
+           -- meaningless here; `sd.loc?` is the real source location of the declaration.
+           let entry <- elabLaitDecl st ⟨sd.stx.raw.clearSourceInfo⟩
+           if let some loc := sd.loc? then
+             -- `insertIfNew`, because a nested `#include` recorded the locations of the
+             -- module it spliced in during the recursive call above; those are the real
+             -- definition sites, not this `#include` line.
+             st.modify fun s =>
+               { s with defLocs := entry.definedNames.foldl (·.insertIfNew · loc) s.defLocs }
+           pure entry
          mkSurfaceDeclEntry d.raw (.DeclList ds)
       | none => throwErrorAt e.raw s!"unknown lait module `{m}`"
   | _ => throwUnsupportedSyntax
-end
 
 /-- Separate syntax category for `#enable_lait`.  A `lait_module` is a *single*
 `lait_decl`, so each top-level declaration parses as its own command — editing
@@ -649,6 +668,7 @@ structure LaitCtx where
   vars : List _root_.String
   hvars : vars.length = n
   varMap : Vec n TyScheme
+  varLocs : Vec n (Option DeclarationLocation)
   opMap : Std.TreeMap _root_.String OpSig
   tyMap : Std.TreeMap _root_.String TyVal
   frozen : Lean.NameSet
@@ -659,13 +679,16 @@ structure LaitCtx where
   commands of a `#lait` file, so that `#include M` in a later command skips a
   module the file already pulled in (e.g. the `stdlib` that `#lait` includes). -/
   included : Lean.NameSet
+  /-- Where each accumulated top-level name was defined, for "go to definition"; see
+  `TcEnv.defLocs`.  Like `included`, accumulates across the commands of a `#lait` file. -/
+  defLocs : Std.TreeMap _root_.String DeclarationLocation
 
 instance : Inhabited LaitCtx where
   default :=
-    { n := 0, vars := List.nil, hvars := rfl, varMap := Vec.nil
+    { n := 0, vars := List.nil, hvars := rfl, varMap := Vec.nil, varLocs := Vec.nil
       opMap := initTcOpMap, tyMap := initTyMap, frozen := {}
       freshCounter := 0, evalEnv := List.nil, evalState := EvalState.new
-      included := {} }
+      included := {}, defLocs := {} }
 
 initialize laitCtxExt : EnvExtension LaitCtx ← registerEnvExtension (pure default)
 
@@ -678,7 +701,8 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     let decl' : Decl ctx.n vars'.length := ctx.hvars ▸ decl
     let startEnv : TcEnv ctx.n :=
       { opMap := ctx.opMap, tyMap := ctx.tyMap, curSyntax := (← getRef)
-        frozen := ctx.frozen, varMap := ctx.varMap
+        frozen := ctx.frozen, varMap := ctx.varMap, varLocs := ctx.varLocs
+        defLocs := ctx.defLocs
         -- `vars` is exactly the list of top-level `def` names accumulated so
         -- far, so the type checker's uniqueness check needs no extra state
         -- beyond the language's built-in names.
@@ -686,15 +710,23 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     -- The continuation runs at the final depth, so it sees the fully-extended
     -- typing environment (all defs/types of this batch in scope).
     let capture : Check vars'.length
-        (Vec vars'.length TyScheme × Std.TreeMap _root_.String OpSig × Std.TreeMap _root_.String TyVal × Lean.NameSet) := do
+        (Vec vars'.length TyScheme × Vec vars'.length (Option DeclarationLocation) ×
+          Std.TreeMap _root_.String OpSig × Std.TreeMap _root_.String TyVal × Lean.NameSet) := do
       let e ← read
-      pure (e.varMap, e.opMap, e.tyMap, e.frozen)
-    let ((vm, om, tm, fr), st) ← liftTermElabM <|
+      pure (e.varMap, e.varLocs, e.opMap, e.tyMap, e.frozen)
+    let ((vm, vl, om, tm, fr), st) ← liftTermElabM <|
       ((Decl.check decl' capture).run startEnv).run { freshCounter := ctx.freshCounter }
     let (evalEnv', evalState') ← liftTermElabM <| Decl.runFrom decl ctx.evalEnv ctx.evalState
-    pure { n := vars'.length, vars := vars', hvars := rfl, varMap := vm
+    pure { n := vars'.length, vars := vars', hvars := rfl, varMap := vm, varLocs := vl
            opMap := om, tyMap := tm, frozen := fr, freshCounter := st.freshCounter
-           evalEnv := evalEnv', evalState := evalState', included := ctx.included }
+           evalEnv := evalEnv', evalState := evalState', included := ctx.included
+           defLocs := ctx.defLocs }
+
+/-- Package the declarations of the command being elaborated for `laitExt`, resolving each
+one's source location in the file that is being elaborated now. -/
+def mkStoredDecls (ds : Array (TSyntax `lait_decl)) : CommandElabM (Array LaitStoredDecl) := do
+  let mod ← getMainModule
+  ds.mapM fun d => do pure { stx := d, loc? := ← mkStartLocation? mod d.raw }
 
 /-- Record a failed elaboration of module `name` as an `.error` result, so that
 Lean code reading the module's outputs back (`getEvalResults`,
@@ -716,14 +748,15 @@ elab "{lait_decl" i:ident d:lait_decl* "}" : command => do
     throwErrorAt i s!"Module `{i.getId}` already exists"
   try
     -- A self-contained module also starts from an empty set of includes.
-    let ds ← liftTermElabM do
-      let included ← IO.mkRef ({} : NameSet)
-      d.mapM (elabLaitDecl included)
+    let (ds, ist) ← liftTermElabM do
+      let st ← IO.mkRef ({} : IncludeState)
+      let ds ← d.mapM (elabLaitDecl st)
+      return (ds, ← st.get)
     -- A `{lait_decl …}` block is a self-contained module: check/run it from a
     -- fresh context, then store its raw syntax for later `#include` and the
     -- `#eval` results it produced for later inspection from Lean.
-    let ctx ← processBatch default ds.toList
-    liftCoreM <| addModule i.getId d
+    let ctx ← processBatch { (default : LaitCtx) with defLocs := ist.defLocs } ds.toList
+    liftCoreM <| addModule i.getId (← mkStoredDecls d)
     liftCoreM <| addEvalResults i.getId ctx.evalState.evalResults
   catch e =>
     recordModuleError i.getId e
@@ -762,18 +795,18 @@ def elabLaitModuleTop : CommandElab := fun stx => do
     let ctx := laitCtxExt.getState (← getEnv)
     -- Includes are tracked per file, not per command, so a module pulled in by an
     -- earlier command of this file is not spliced in again by this one.
-    let (ds, included) ← liftTermElabM do
-      let included ← IO.mkRef ctx.included
-      let ds ← decls.mapM fun d => elabLaitDecl included ⟨d⟩
-      return (ds, ← included.get)
-    let ctx' ← processBatch ctx ds
-    modifyEnv (laitCtxExt.setState · { ctx' with included })
+    let (ds, ist) ← liftTermElabM do
+      let st ← IO.mkRef { included := ctx.included, defLocs := ctx.defLocs : IncludeState }
+      let ds ← decls.mapM fun d => elabLaitDecl st ⟨d⟩
+      return (ds, ← st.get)
+    let ctx' ← processBatch { ctx with included := ist.included, defLocs := ist.defLocs } ds
+    modifyEnv (laitCtxExt.setState · ctx')
     -- The file's top-level declarations form a Lait module named after the file, just
     -- like the ones written with `{lait_decl …}`: record this command's syntax and the
     -- `#eval` results it produced, so both can be read back later (`#include`,
     -- `getEvalResults`).  Each command extends the module in place.
     let modName ← currentLaitModule
-    liftCoreM <| addModule modName (decls.toArray.map (⟨·⟩))
+    liftCoreM <| addModule modName (← mkStoredDecls (decls.toArray.map (⟨·⟩)))
     liftCoreM <| addEvalResults modName
       (ctx'.evalState.evalResults.extract ctx.evalState.evalResults.size)
   catch e =>

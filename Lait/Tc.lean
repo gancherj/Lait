@@ -30,6 +30,14 @@ structure TcEnv (n : Nat) where
   -- latter via nested `Fin.cases` closures in `withVar` makes deep lookups
   -- exponential because sharing is lost as the chain is threaded through the monad.
   varMap : Vec n TyScheme
+  -- Where "go to definition" should jump for each in-scope variable, in the same order as
+  -- `varMap`.  `none` for a binding with no usable source position, e.g. one introduced by
+  -- a declaration that a surface pass synthesized.
+  varLocs : Vec n (Option DeclarationLocation)
+  -- Source locations of the top-level names spliced into this module by `#include`.  Their
+  -- syntax carries no positions of its own (it belongs to another file, see the `#include`
+  -- case of `elabLaitDecl`), so `#include` records where each name was defined instead.
+  defLocs : Std.TreeMap String DeclarationLocation
   -- Running union of `Ty.fvars` over every in-scope binding's scheme, maintained
   -- incrementally by `withVar` so that `envFVars` is O(1).
   frozen : Lean.NameSet
@@ -44,7 +52,9 @@ abbrev Constraint := Lean.Syntax × TyX 0 × TyX 0
 structure TcState where
   constraints : List Constraint := []
   freshCounter : Nat := 0
-  stxMap: List (Lean.Syntax × Ty 0) := []
+  -- Hovers to attach once the constraints are solved: the syntax of an expression, its
+  -- type, and -- for a variable occurrence -- the location of the binding it resolves to.
+  stxMap: List (Lean.Syntax × Ty 0 × Option DeclarationLocation) := []
 
 abbrev Check n := ReaderT (TcEnv n) (StateT TcState TermElabM)
 
@@ -111,15 +121,24 @@ partial def TyX.fvars : TyX n → Lean.NameSet
   | .Var _ | .Int | .Bool | .Str | .Unit => {}
 end
 
-def withVar (ty : TyScheme) (k : Check (n + 1) α) : Check n α := fun env =>
+def withVar (ty : TyScheme) (loc? : Option DeclarationLocation)
+    (k : Check (n + 1) α) : Check n α := fun env =>
   k {
     opMap := env.opMap,
     tyMap := env.tyMap,
     curSyntax := env.curSyntax,
     frozen := env.frozen.union (Ty.fvars ty.ty),
     varMap := env.varMap.cons ty,
+    varLocs := env.varLocs.cons loc?,
+    defLocs := env.defLocs,
     defNames := env.defNames
   }
+
+/-- The "go to definition" target of a binding introduced by `stx`.  `stx` belongs to the
+file being elaborated (declarations from other modules have no positions), so its own start
+is the target. -/
+def Check.locOf (stx : Lean.Syntax) : Check n (Option DeclarationLocation) := do
+  mkStartLocation? (← getMainModule) stx
 
 -- Top-level names are unique, so re-defining one is an error rather than
 -- shadowing.  Checked before the body is inferred, so that a duplicate is
@@ -133,8 +152,13 @@ def checkDefNameFresh (stx : Lean.Syntax) (name : String) : Check n Unit := do
 def withDefName (stx : Lean.Syntax) (name : String) (ty : TyScheme)
     (k : Check (n + 1) α) : Check n α := do
   checkDefNameFresh stx name
+  -- A name spliced in from another module is declared by position-less syntax; `#include`
+  -- recorded where it was defined, so prefer that over `stx`.
+  let loc? ← match (← read).defLocs.get? name with
+    | some loc => pure (some loc)
+    | none => Check.locOf stx
   withReader (fun env => { env with defNames := env.defNames.insert name })
-    (withVar ty k)
+    (withVar ty loc? k)
 
 -- Type names are unique too: a `type` declaration may not re-declare a type
 -- introduced by an earlier declaration, nor a primitive one -- `initTyMap` seeds
@@ -435,7 +459,7 @@ mutual
         let argTy : Ty 0 ← match oty with
           | none => freshTy stx
           | some t => normalizeTy t
-        let bodyTy ← withVar (TyScheme.mono argTy) (Exp.infer e)
+        let bodyTy ← withVar (TyScheme.mono argTy) (← Check.locOf stx) (Exp.infer e)
         pure (.mk stx (.Arrow argTy bodyTy))
       | .mk stx (.App e1 e2) => do
         let t1 ← Exp.infer e1
@@ -449,7 +473,7 @@ mutual
         match oty with
         | none => pure ()
         | some t => do let t ← normalizeTy t; addConstraint stx t1 t
-        withVar (TyScheme.mono t1) (Exp.infer e2)
+        withVar (TyScheme.mono t1) (← Check.locOf stx) (Exp.infer e2)
       | .mk stx (.If e1 e2 e3) => do
         let t1 ← Exp.infer e1
         let t2 ← Exp.infer e2
@@ -487,7 +511,7 @@ mutual
         pure (.mk stx .Unit)
       | .mk stx (.Rec _ e1) => do
         let r <- freshTy stx
-        let res <- withVar (TyScheme.mono r) (Exp.infer e1)
+        let res <- withVar (TyScheme.mono r) (← Check.locOf stx) (Exp.infer e1)
         addConstraint stx r res
         pure res
       | .mk stx (.Deref e) => do
@@ -535,7 +559,11 @@ mutual
           | some (_, t) => pure t
           | none => throwErrorAt stx s!"Field {x} not found in record"
         | _ => throwErrorAt stx s!"Record get of non-record"
-    modify fun s => { s with stxMap := (e.stx, resTy) :: s.stxMap }
+    -- A variable occurrence points at its binding; any other expression has no target.
+    let loc? ← match e with
+      | .mk _ (.Var i) => pure ((← read).varLocs.get i)
+      | _ => pure none
+    modify fun s => { s with stxMap := (e.stx, resTy, loc?) :: s.stxMap }
     pure resTy
 
   -- `seen` accumulates the constructor names already matched (in reverse), used
@@ -572,7 +600,8 @@ mutual
           -- index 0 (see `casesFromSurface`: `xs ++ vars`).  Since `withVar`
           -- pushes each new binding to index 0, we must introduce the argument
           -- types innermost-first, i.e. reversed, so `argTys[i]` lands at index i.
-          let bodyTy ← Exp.inferWithVars argTys.reverse (body'.cast (by simp))
+          let bodyTy ← Exp.inferWithVars argTys.reverse (← Check.locOf matchStx)
+            (body'.cast (by simp))
           addConstraint matchStx bodyTy resTy
           Exp.inferCases rest scrutTy resTy matchStx (cname :: seen)
         else
@@ -582,11 +611,12 @@ mutual
   -- Extend the env with monomorphic bindings for each ty in `argTys`,
   -- then infer `body`.
   partial def Exp.inferWithVars {m : Nat} :
-      (argTys : List (Ty 0)) → Exp 0 (m + argTys.length) → Check m (Ty 0)
-    | [], body => Exp.infer (body.cast (by simp))
-    | t :: ts, body =>
-        withVar (TyScheme.mono t) $
-          Exp.inferWithVars (m := m + 1) ts (body.cast (by simp; omega))
+      (argTys : List (Ty 0)) → Option DeclarationLocation → Exp 0 (m + argTys.length) →
+      Check m (Ty 0)
+    | [], _, body => Exp.infer (body.cast (by simp))
+    | t :: ts, loc?, body =>
+        withVar (TyScheme.mono t) loc? $
+          Exp.inferWithVars (m := m + 1) ts loc? (body.cast (by simp; omega))
 end
 
 -- ---- Generalization ----
@@ -611,9 +641,9 @@ def applySubstTy (sbst : Lean.NameMap (TyX 0)) (t : Ty 0) :
 -- ---- Decl checking ----
 
 def addStxMapHovers (sbst : NameMap (TyX 0)) : Check n Unit := do
-  forM ((<- get).stxMap) fun (stx, ty) => do
+  forM ((<- get).stxMap) fun (stx, ty, loc?) => do
     let ty' <- applySubstTy sbst ty
-    Check.runMetaM (addHoverInfo stx s!"{ty'.pretty}")
+    Check.runMetaM (addHoverInfo stx s!"{ty'.pretty}" loc?)
   modify fun s => { s with stxMap := [] }
 
 

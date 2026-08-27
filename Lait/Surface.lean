@@ -1,4 +1,5 @@
 import Std.Data.TreeMap
+import Lait.Utils
 import Lean
 
 deriving instance Lean.ToExpr for String.Pos.Raw
@@ -204,9 +205,28 @@ partial def flattenDecls (d : DeclEntry) : List DeclEntry :=
   | .DeclList ds => ds.flatMap flattenDecls
   | _ => [d]
 
+/-- The top-level *term* names this declaration brings into scope: the names of its
+`def`s, and the constructors of its inductive types (each of which becomes a `def`, see
+`mkConstrFns`).  Type names are not included: they live in `tyMap`, not in the variable
+environment, and so are never the target of a "go to definition".  Used by `#include` to
+remember where a spliced-in name was defined. -/
+partial def definedNames (d : DeclEntry) : List String :=
+  match d.val with
+  | .DeclEntryDef n _ _ => [n]
+  | .DeclEntryDefFn n _ _ _ => [n]
+  | .DeclEntryDefMutual cs => cs.map (fun (_, n, _, _, _) => n)
+  | .DeclEntryInductive _ _ cs => cs.map (·.1)
+  | .DeclEntryMutualTypes ts => ts.flatMap (fun (_, _, cs) => cs.map (·.1))
+  | .DeclList ds => ds.flatMap definedNames
+  | .DeclEntryTypeAlias .. | .DeclEval .. | .DeclTest .. | .DeclTestError .. | .DeclCheck .. => []
+
 -- The constructor functions for one inductive type: each constructor `C` of
 -- arity n becomes `def C : T1 -> ... -> Tn -> Out := fun x0 ... x_{n-1} => C x0 ...`.
-def mkConstrFns (c : String) (tvs : List String) (cs : List (String × List (String × Ty))) : List DeclEntry :=
+-- `stx` is the syntax of the `type` declaration, marking where the constructors are
+-- defined; it is collapsed to a point, since the hover of each generated `def` would
+-- otherwise cover the whole declaration (`Decl.check` hovers a `def` with its scheme).
+def mkConstrFns (stx : Lean.Syntax) (c : String) (tvs : List String)
+    (cs : List (String × List (String × Ty))) : List DeclEntry :=
   let outTy : Ty := .TApp c (tvs.map .Var)
   cs.map fun (cname, args) =>
     let rec go (args : List (String × Ty)) (vars : List String) (i : Nat) : Exp :=
@@ -216,16 +236,16 @@ def mkConstrFns (c : String) (tvs : List String) (cs : List (String × List (Str
         let v := s!"x{i}"
         .Lam v (some argTy) $ go args' (vars ++ [v]) (i + 1)
     let fullTy : Ty := args.foldr (fun (_, argTy) acc => .Arrow argTy acc) outTy
-    .DeclEntryDef cname (some fullTy) (go args [] 0)
+    (⟨stx.startMarker, .DeclEntryDef cname (some fullTy) (go args [] 0)⟩ : DeclEntry)
 
 def elabConstrFns (d : DeclEntry) : List DeclEntry :=
   match d.val with
-  | .DeclEntryInductive c tvs cs => d :: mkConstrFns c tvs cs
+  | .DeclEntryInductive c tvs cs => d :: mkConstrFns d.stx c tvs cs
   | .DeclEntryMutualTypes inds =>
     -- All type declarations first, so every type is in scope before any
     -- constructor function (whose signature may reference a sibling type).
     let indDecls := inds.map fun (c, tvs, cs) => (⟨d.stx, .DeclEntryInductive c tvs cs⟩ : DeclEntry)
-    let ctorFns := inds.flatMap fun (c, tvs, cs) => mkConstrFns c tvs cs
+    let ctorFns := inds.flatMap fun (c, tvs, cs) => mkConstrFns d.stx c tvs cs
     indDecls ++ ctorFns
   | _ => [d]
 
@@ -240,7 +260,7 @@ def elabDefFn (d : DeclEntry) : List DeclEntry :=
       .Lam x (some argTy) $ go_e args' body
     let fn_ty := args.foldr (fun (_, argTy) acc => .Arrow argTy acc) oty
     let fn_exp : Exp := Exp.mk d.stx (.Rec s (go_e args e))
-    [.DeclEntryDef s (some fn_ty) fn_exp]
+    [(⟨d.stx, .DeclEntryDef s (some fn_ty) fn_exp⟩ : DeclEntry)]
   | _ => [d]
 
 -- Lower a group of mutually-recursive functions to a single self-recursive
