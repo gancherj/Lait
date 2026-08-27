@@ -25,7 +25,7 @@ def Const.pretty (c : Const) : _root_.String :=
   match c with
   | .Num n => toString n
   | .Bool b => if b then "true" else "false"
-  | .String s => s
+  | .String s => s!"\"{s}\""
   | .Unit => "()"
 
 partial def Val.pretty (v : Val) : _root_.String :=
@@ -37,6 +37,11 @@ partial def Val.pretty (v : Val) : _root_.String :=
   | .VPair v1 v2 => "(" ++ v1.pretty ++ ", " ++ v2.pretty ++ ")"
   | .VConstructor x vs => x ++ "(" ++ _root_.String.intercalate ", " (vs.map pretty) ++ ")"
   | .VRecord xs => "{" ++ _root_.String.intercalate ", " (xs.map fun (x, v) => x ++ ": " ++ v.pretty) ++ "}"
+
+def Val.getRawString (v : Val) :=
+  match v with
+  | .VConst (.String s) => s
+  | _ => "error: getRawString"
 
 partial def Val.eq (stx : Lean.Syntax) (v1 v2 : Val) : Except (String × Lean.Syntax) Bool :=
   match v1, v2 with
@@ -305,7 +310,7 @@ partial def Exp.eval (env : List Val) (e : Exp t m) : ExpEval Val := do
     throwExp stx (← Exp.eval env e).pretty
   | .mk _ (.Print e) => do
     let v ← Exp.eval env e
-    ExpEval.log (s!"{v.pretty}")
+    ExpEval.log (s!"{v.getRawString}")
     pure (.VConst .Unit)
   | .mk _ (.Try e1 e2) => do
     match ← ExpEval.scopeError (Exp.eval env e1) with
