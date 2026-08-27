@@ -316,7 +316,8 @@ partial def Exp.eval (env : List Val) (e : Exp t m) : ExpEval Val := do
   | .mk _ (.Pair e1 e2) => do
     pure (.VPair (← Exp.eval env e1) (← Exp.eval env e2))
   | .mk stx (.Error e) => do
-    throwExp stx (← Exp.eval env e).pretty
+    let s := (<- Exp.eval env e).getRawString
+    throwExp stx $ "ERROR: " ++ s
   | .mk _ (.Print e) => do
     let v ← Exp.eval env e
     ExpEval.log (s!"{v.getRawString}")

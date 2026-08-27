@@ -195,6 +195,7 @@ syntax num : lait_exp
 syntax:67 "-" num : lait_exp
 syntax str : lait_exp
 syntax "()" : lait_exp
+syntax "..." : lait_exp
 syntax "fun" lait_ident "=>" lait_exp : lait_exp
 syntax "fun" lait_typed_var "=>" lait_exp : lait_exp
 syntax:70 lait_exp:70 lait_exp:71 : lait_exp
@@ -338,6 +339,14 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | ($e:lait_exp)) => elabLaitExp e
   | `(lait_exp | error $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Error (← elabLaitExp e1))
+  | `(lait_exp | ...) => do
+    match e.raw.getRange? with
+    | none =>  elabLaitExp (<- `(lait_exp| error "unimplemented"))
+    | some range =>
+      let pos := (← getFileMap).toPosition range.start
+      let s : TSyntax `str :=
+        Syntax.mkStrLit s!"unimplemented: {← getFileName}, Line {pos.line}, Column {pos.column}"
+      elabLaitExp (<- `(lait_exp| error $s:str))
   | `(lait_exp | internal_print $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Print (← elabLaitExp e1))
   | `(lait_exp | $n:num) =>
