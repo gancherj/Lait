@@ -25,7 +25,7 @@ def Const.pretty (c : Const) : _root_.String :=
   match c with
   | .Num n => toString n
   | .Bool b => if b then "true" else "false"
-  | .String s => s!"\"{s}\""
+  | .String s => s
   | .Unit => "()"
 
 partial def Val.pretty (v : Val) : _root_.String :=
@@ -216,7 +216,7 @@ def withTimeout (ms : UInt32) (action : IO α) : IO (Option α) := do
   | _           => return none
 
 def printLogs  (stx : Lean.Syntax) (logs : List String) : DeclEval Unit := do
-  logs.forM fun log => do
+  logs.reverse.forM fun log => do
     Lean.logInfoAt stx log
 
 def DeclEval.liftExpEval (stx : Lean.Syntax) (e : ExpEval α) : DeclEval (Except (String × Lean.Syntax) α) := do
