@@ -4,6 +4,18 @@ import Lait
 def foo := 1234
 def id  := fun x => x
 
+type IntPair := Int * Int
+
+type MyPair<a> := List<List<a>>
+
+type NatTree :=
+  | NTLeaf (v : Int)
+  | NTNode (l : NatTree) (r : NatTree)
+
+type BinTree<a> :=
+  | BTLeaf (v : a)
+  | BTNode (l : BinTree<a>) (r : BinTree<a>)
+
 type Tree :=
   | Leaf (v : Int)
   | Node (t1 : Tree) (t2 : Tree)

@@ -459,6 +459,7 @@ declare_syntax_cat lait_decl
 declare_syntax_cat lait_inductive_constr
 
 declare_syntax_cat lait_def_kw
+declare_syntax_cat lait_type_kw
 
 /--
 Define a top-level value or function.
@@ -475,12 +476,32 @@ and isOdd (n : Int) :=
 -/
 syntax "def" : lait_def_kw
 
+/--
+Define a type.
+Some examples:
+
+```
+type IntPair := Int * Int
+
+type MyPair<a> := a * a
+
+type NatTree :=
+  | NTLeaf (v : Int)
+  | NTNode (l : NatTree) (r : NatTree)
+
+type BinTree<a> :=
+  | BTLeaf (v : a)
+  | BTNode (l : BinTree<a>) (r : BinTree<a>)
+```
+-/
+syntax "type" : lait_type_kw
+
 
 syntax lait_def_kw lait_ident ":=" lait_exp : lait_decl
 
 syntax lait_def_kw lait_ident ":" lait_ty ":=" lait_exp : lait_decl
-syntax "type" ident ":=" lait_ty : lait_decl
-syntax "type" ident "<" ident,* ">" ":=" lait_ty : lait_decl
+syntax lait_type_kw ident ":=" lait_ty : lait_decl
+syntax lait_type_kw ident "<" ident,* ">" ":=" lait_ty : lait_decl
 
 -- Function and (inductive) type definitions.  Two or more clauses linked with
 -- `and` form a mutually-recursive group; a single clause (no `and`) is the
@@ -492,7 +513,7 @@ syntax "and" lait_ident lait_param+ (":" lait_ty)? ":=" lait_exp : lait_and_def
 
 syntax lait_def_kw lait_ident lait_param+ (":" lait_ty)? ":=" lait_exp lait_and_def* : lait_decl
 syntax "and" ident ("<" ident,* ">")? ":=" lait_inductive_constr* : lait_and_type
-syntax "type" ident ("<" ident,* ">")? ":=" lait_inductive_constr* lait_and_type* : lait_decl
+syntax lait_type_kw ident ("<" ident,* ">")? ":=" lait_inductive_constr* lait_and_type* : lait_decl
 
 syntax "|" ident lait_typed_var* : lait_inductive_constr
 /--
@@ -848,8 +869,8 @@ public meta def elabEnableDsl : CommandElab := fun _stx => do
     originalCommandParserExt.setState env (categoryParserFnExtension.getState env)
   replaceCategoryParser `command laitCommandParser
 
-
 elab "#lait" : command => do
+  elabCommand (← `(command | delete_token ">>"))
   elabCommand (← `(command| #lait_enable))
   let stdlibId := mkIdentFrom (← getRef) `stdlib
   let includeStx ← `(lait_decl| #include $stdlibId:ident)

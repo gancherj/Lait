@@ -151,3 +151,39 @@ def LogT.run (c : LogT T m a) : m (List T × a) := c
 
 instance [Monad m] : MonadLift m (LogT T m) where
   monadLift {α} (x : m α) : LogT T m α := LogT.lift x
+
+open Lean Parser Data Trie
+
+partial def Lean.Data.Trie.erase {α} (t : Trie α) (s : String) : Trie α :=
+  let rec loop
+    | i, leaf val =>
+      if i < s.utf8ByteSize then
+        leaf val
+      else
+        leaf none
+    | i, node1 val c' t' =>
+      if h : i < s.utf8ByteSize then
+        let c := s.getUTF8Byte ⟨i⟩ h
+        if c == c'
+        then node1 val c' (loop (i + 1) t')
+        else node1 val c' t'
+      else
+        node1 none c' t'
+    | i, node val cs ts =>
+      if h : i < s.utf8ByteSize then
+        let c := s.getUTF8Byte ⟨i⟩ h
+        match cs.findIdx? (· == c) with
+        | none   => node val cs ts
+        | some idx => node val cs {ts with [idx] := loop (i + 1) ts[idx]!}
+      else
+        node none cs ts
+  loop 0 t
+
+elab "delete_token " tk:str : command => do
+  let tk := tk.getString
+  let env ← getEnv
+  let s := parserExtension.ext.getState env
+  if let top :: states := s.stateStack then
+    modifyEnv fun env =>
+      let top := { top with state.tokens := top.state.tokens.erase tk }
+      parserExtension.ext.setState env { s with stateStack := top :: states }
