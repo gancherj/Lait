@@ -28,15 +28,24 @@ def Const.pretty (c : Const) : _root_.String :=
   | .String s => s!"\"{s}\""
   | .Unit => "()"
 
-partial def Val.pretty (v : Val) : _root_.String :=
+def wrapParensIf (b : Bool) (s : String) :=
+  if b then "(" ++ s ++ ")" else s
+
+partial def Val.prettyRec (v : Val) (n : Nat) : _root_.String :=
   match v with
   | .VConst c => c.pretty
   | .VLoc _ => "<location>"
   | .VClosure .. => "<function>"
   | .VRec .. => "<function>"
-  | .VPair v1 v2 => "(" ++ v1.pretty ++ ", " ++ v2.pretty ++ ")"
-  | .VConstructor x vs => x ++ "(" ++ _root_.String.intercalate ", " (vs.map pretty) ++ ")"
-  | .VRecord xs => "{" ++ _root_.String.intercalate ", " (xs.map fun (x, v) => x ++ ": " ++ v.pretty) ++ "}"
+  | .VPair v1 v2 => "(" ++ v1.prettyRec n ++ ", " ++ v2.prettyRec n ++ ")"
+  | .VConstructor x vs =>
+    wrapParensIf (n > 0 && vs.length > 0) $
+      match vs with
+      | [] => x
+      | _ => x ++ " " ++ _root_.String.intercalate " " (vs.map fun v => v.prettyRec (n + 1))
+  | .VRecord xs => "{" ++ _root_.String.intercalate ", " (xs.map fun (x, v) => x ++ ": " ++ v.prettyRec n) ++ "}"
+
+partial def Val.pretty (v : Val) := v.prettyRec 0
 
 def Val.getRawString (v : Val) :=
   match v with
