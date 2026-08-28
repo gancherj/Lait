@@ -6,6 +6,8 @@ def id  := fun x => x
 
 type IntPair := Int * Int
 
+#check alloc []
+
 type MyPair<a> := List<List<a>>
 
 type NatTree :=
