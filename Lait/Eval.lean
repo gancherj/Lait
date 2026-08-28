@@ -52,12 +52,32 @@ def Val.getRawString (v : Val) :=
   | .VConst (.String s) => s
   | _ => "error: getRawString"
 
-partial def Val.eq (stx : Lean.Syntax) (v1 v2 : Val) : Except (String × Lean.Syntax) Bool :=
+/-- Why an expression stopped early.  `UserError` is a run-time failure of the
+program itself (`error e`, a bad primitive application, a failed match, ...) and
+is what `try ... with ... end` recovers from.  `TimeoutError` is the interpreter
+saying it gave up (the step limit of `EvalState.maxSteps` was exhausted); it is
+*not* catchable, so a `try` cannot turn a non-terminating program into a
+succeeding one. -/
+inductive ExpError where
+  | UserError : String -> ExpError
+  | TimeoutError : ExpError
+  deriving Inhabited, Repr
+
+def ExpError.message : ExpError -> String
+  | .UserError s => s
+  | .TimeoutError => "Step limit exceeded: evaluation did not terminate"
+
+/-- Is this an error raised by the program (and hence catchable by `try`)? -/
+def ExpError.isUserError : ExpError -> Bool
+  | .UserError _ => true
+  | .TimeoutError => false
+
+partial def Val.eq (stx : Lean.Syntax) (v1 v2 : Val) : Except (ExpError × Lean.Syntax) Bool :=
   match v1, v2 with
   | .VConst c1, .VConst c2 => pure (c1 == c2)
   | .VLoc i1, .VLoc i2 => pure (i1 == i2)
-  | .VClosure .., .VClosure .. => throw (s!"Equality not supported for functions", stx)
-  | .VRec .., .VRec .. => throw (s!"Equality not supported for functions", stx)
+  | .VClosure .., .VClosure .. => throw (ExpError.UserError s!"Equality not supported for functions", stx)
+  | .VRec .., .VRec .. => throw (ExpError.UserError s!"Equality not supported for functions", stx)
   | .VPair v1 v2, .VPair v1' v2' => do
     let b1 <- v1.eq stx v1'
     let b2 <- v2.eq stx v2'
@@ -69,6 +89,13 @@ partial def Val.eq (stx : Lean.Syntax) (v1 v2 : Val) : Except (String × Lean.Sy
        pure false
      else do
       (vs1.zip vs2).allM fun (v1, v2) => v1.eq stx v2
+  | .VRecord xs1, .VRecord xs2 =>
+      if xs1.length != xs2.length then pure false
+      else
+        let s1 := xs1.mergeSort (fun a b => a.1 <= b.1)
+        let s2 := xs2.mergeSort (fun a b => a.1 <= b.1)
+        if s1.map Prod.fst != s2.map Prod.fst then pure false
+        else (s1.zip s2).allM fun ((_, v1), (_, v2)) => v1.eq stx v2
   | _, _ => pure false
 
 
@@ -113,7 +140,7 @@ instance : ToString EvalResult where
 
 structure EvalState where
   heap : Heap
-  opMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (String × Lean.Syntax) Val)
+  opMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (ExpError × Lean.Syntax) Val)
   timeout : UInt32 := 3000
   /-- Interpreter steps per top-level evaluation (`Exp.eval`, `Val.whnf`, `Val.apply`). -/
   maxSteps : Nat := 100000
@@ -122,74 +149,74 @@ structure EvalState where
   /-- Results of the `#eval`s run so far, in declaration order. -/
   evalResults : Array EvalResult := #[]
 
-def initOpMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (String × Lean.Syntax) Val) :=
+def initOpMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (ExpError × Lean.Syntax) Val) :=
   Std.TreeMap.ofList [
     ("+", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Num (n1 + n2)))
-      | _ => Except.error (s!"Wrong inputs to addition", stx)
+      | _ => Except.error (ExpError.UserError s!"Wrong inputs to addition", stx)
     ),
     ("-", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Num (n1 - n2)))
-      | _ => throw (s!"Wrong inputs to subtraction", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to subtraction", stx)
     ),
     ("*", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Num (n1 * n2)))
-      | _ => throw (s!"Wrong inputs to multiplication", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to multiplication", stx)
     ),
     ("++", fun stx vs => do
       match vs with
       | [Val.VConst (Const.String s1), .VConst (Const.String s2)] => pure (Val.VConst (Const.String (s1 ++ s2)))
-      | _ => throw (s!"Wrong inputs to ++", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to ++", stx)
     ),
     ("not", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Bool b)] => pure (Val.VConst (Const.Bool (not b)))
-      | _ => throw (s!"Wrong inputs to not", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to not", stx)
     ),
     ("&&", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Bool b1), .VConst (Const.Bool b2)] => pure (Val.VConst (Const.Bool (b1 && b2)))
-      | _ => throw (s!"Wrong inputs to &&", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to &&", stx)
     ),
     ("||", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Bool b1), .VConst (Const.Bool b2)] => pure (Val.VConst (Const.Bool (b1 || b2)))
-      | _ => throw (s!"Wrong inputs to ||", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to ||", stx)
     ),
     ("<", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Bool (n1 < n2)))
-      | _ => throw (s!"Wrong inputs to <", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to <", stx)
     ),
     (">", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Bool (n1 > n2)))
-      | _ => throw (s!"Wrong inputs to >", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to >", stx)
     ),
     ("<=", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Bool (n1 ≤ n2)))
-      | _ => throw (s!"Wrong inputs to <=", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to <=", stx)
     ),
     (">=", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Bool (n1 ≥ n2)))
-      | _ => throw (s!"Wrong inputs to >=", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to >=", stx)
     ),
     ("toString", fun stx vs => do
       match vs with
       | [v] => pure (Val.VConst (Const.String (Val.pretty v)))
-      | _ => throw (s!"Wrong inputs to num2string", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to num2string", stx)
     ),
     ("==", fun (stx : Lean.Syntax) (vs : List Val) => do
       match vs with
       | [v1, v2] => do
           let b <- v1.eq stx v2
           pure (Val.VConst (Const.Bool b))
-      | _ => throw (s!"Wrong inputs to ==", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to ==", stx)
     ),
   ]
 
@@ -200,17 +227,25 @@ def EvalState.resetSteps (st : EvalState) : EvalState :=
   { st with stepsRemaining := st.maxSteps, logs := [] }
 
 open Lean Elab Command
-abbrev ExpEval := StateT EvalState (ExceptT (String × Lean.Syntax) IO)
-abbrev DeclEval := StateT EvalState (ExceptT (String × Lean.Syntax) TermElabM)
 
+
+
+abbrev ExpEval := StateT EvalState (ExceptT (ExpError × Lean.Syntax) IO)
+abbrev DeclEval := StateT EvalState (ExceptT (ExpError × Lean.Syntax) TermElabM)
+
+def throwExpError (stx : Lean.Syntax) (e : ExpError) : ExpEval α :=
+  fun _ => (pure (Except.error (e, stx)) : IO (Except (ExpError × Lean.Syntax) (α × EvalState)))
 def throwExp (stx : Lean.Syntax) (e : String) : ExpEval α :=
-  fun _ => (pure (Except.error (e, stx)) : IO (Except (String × Lean.Syntax) (α × EvalState)))
+  throwExpError stx (.UserError e)
 def throwDecl (stx : Lean.Syntax) (e : String) : DeclEval α :=
-  fun _ => (pure (Except.error (e, stx)) : TermElabM (Except (String × Lean.Syntax) (α × EvalState)))
+  fun _ => (pure (Except.error (ExpError.UserError e, stx)) : TermElabM (Except (ExpError × Lean.Syntax) (α × EvalState)))
 
-def ExpEval.scopeError (e : ExpEval α) : ExpEval (Except (String × Lean.Syntax) α) := do
+-- Run `e`, turning a raised error into a returned one.  On failure the state is
+-- rolled back to what it was before `e` ran (including the step budget, since
+-- the state is dropped along with the error by `ExceptT`).
+def ExpEval.scopeError (e : ExpEval α) : ExpEval (Except (ExpError × Lean.Syntax) α) := do
   let st ← get
-  let res : Except (String × Lean.Syntax) (α × EvalState) ← (e.run st).run
+  let res : Except (ExpError × Lean.Syntax) (α × EvalState) ← (e.run st).run
   match res with
   | .ok (a, st') => do set st'; pure (.ok a)
   | .error err => pure (.error err)
@@ -236,23 +271,23 @@ def printLogs  (stx : Lean.Syntax) (logs : List String) : DeclEval Unit := do
 def DeclEval.liftExpEval (stx : Lean.Syntax) (e : ExpEval α) : DeclEval (Except (String × Lean.Syntax) α) := do
   modify EvalState.resetSteps
   let st ← get
-  let res : Option (Except (String × Lean.Syntax) (α × EvalState)) ← withTimeout st.timeout (e.run st).run
+  let res : Option (Except (ExpError × Lean.Syntax) (α × EvalState)) ← withTimeout st.timeout (e.run st).run
   match res with
   | none => pure (.error ("Timeout", .missing))
   | some (.ok (a, st')) => do
      printLogs stx st'.logs
      set { st' with logs := [] }
      pure (.ok a)
-  | some (.error err) => throwDecl err.2 err.1
+  | some (.error err) => throwDecl err.2 err.1.message
 
 def DeclEval.scopeExpError (stx : Lean.Syntax) (e : ExpEval α) : DeclEval (Except String α) := do
   modify EvalState.resetSteps
   let st ← get
-  let res : Option (Except (String × Lean.Syntax) (α × EvalState)) ← withTimeout st.timeout (e.run st).run
+  let res : Option (Except (ExpError × Lean.Syntax) (α × EvalState)) ← withTimeout st.timeout (e.run st).run
   match res with
   | none => pure (.error "Timeout")
   | some (.ok (a, st')) => do printLogs stx st'.logs; set { st' with logs := [] }; pure (.ok a)
-  | some (.error err) => pure (.error err.1)
+  | some (.error err) => pure (.error err.1.message)
 
 partial def evalOp (stx : Lean.Syntax) (s : String) (vs : List Val) : ExpEval Val := do
   match (← get).opMap.get? s with
@@ -265,7 +300,7 @@ def ExpEval.log (log : String) : ExpEval Unit := do
 def ExpEval.consumeStep (stx : Lean.Syntax) : ExpEval Unit := do
   let st ← get
   if st.stepsRemaining = 0 then
-    throwExp stx s!"Step limit exceeded ({st.maxSteps} steps): evaluation did not terminate"
+    throwExpError stx .TimeoutError
   set { st with stepsRemaining := st.stepsRemaining - 1 }
 
 mutual
@@ -325,7 +360,10 @@ partial def Exp.eval (env : List Val) (e : Exp t m) : ExpEval Val := do
   | .mk _ (.Try e1 e2) => do
     match ← ExpEval.scopeError (Exp.eval env e1) with
     | .ok v => pure v
-    | .error _ => Exp.eval env e2
+    -- Only the program's own errors are recoverable; the interpreter giving up
+    -- (step limit) propagates past the handler.
+    | .error (err, estx) =>
+      if err.isUserError then Exp.eval env e2 else throwExpError estx err
   | .mk _ (.Alloc e) => do
     let v ← Exp.eval env e
     let st ← get
@@ -447,7 +485,7 @@ def Decl.eval (d : Decl n m) (env : List Val) : DeclEval (List Val) :=
 def Decl.run (d : Decl 0 m) : TermElabM Unit := do
   match <- d.eval [] EvalState.new with
   | .ok _ => pure ()
-  | .error e => throwErrorAt e.2 e.1
+  | .error e => throwErrorAt e.2 e.1.message
 
 -- Evaluate `d` starting from an existing runtime environment `env` and state
 -- `st` (rather than empty), returning the extended environment and state.  Used
@@ -456,4 +494,4 @@ def Decl.runFrom (d : Decl n m) (env : List Val) (st : EvalState) :
     TermElabM (List Val × EvalState) := do
   match <- (d.eval env) st with
   | .ok res => pure res
-  | .error e => throwErrorAt e.2 e.1
+  | .error e => throwErrorAt e.2 e.1.message

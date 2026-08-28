@@ -93,7 +93,8 @@ def List.hasDup [BEq α] (xs : List α) : Bool :=
   | [] => false
   | x :: xs => if xs.contains x then true else xs.hasDup
 
-
+def TyScheme.hasDupFVars (t : TyScheme) : Bool :=
+  t.tyVars.hasDup
 
 mutual
 partial def normalizeTy : Ty k -> Check n (Ty k)
@@ -823,6 +824,8 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
     k
   | _, _, .mk dstx (.DeclTypeAlias tname alias), k => do
     checkTyNameFresh dstx tname
+    if alias.hasDupFVars then
+      throwErrorAt dstx s!"Type alias cannot have duplicate type variables"
     let _ <- normalizeTy alias.ty
     withReader (fun env => { env with tyMap := env.tyMap.insert tname (.Alias alias) }) k
   | _, _, .mk dstx (.DeclInductive tname tvars cs), k => do
@@ -830,6 +833,8 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
     -- operator/constructor, or repeating a name within this declaration, so we
     -- never silently overwrite an `opMap` entry.
     checkTyNameFresh dstx tname
+    if tvars.hasDup then
+      throwErrorAt dstx s!"Type definition cannot have duplicate type variables"
     let env ← read
     let mut declared : List String := []
     for (cname, _) in cs do
