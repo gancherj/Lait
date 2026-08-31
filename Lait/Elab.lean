@@ -56,9 +56,6 @@ def getLastEvalResult (name : Name) : CoreM (Option EvalResult) := do
   return ((laitEvalExt.getState (← getEnv)).find? name).getD #[] |>.back?
 
 declare_syntax_cat lait_ty
-declare_syntax_cat lait_ty_field
-
-syntax ident ":" lait_ty : lait_ty_field
 
 /--
 The type of whole numbers: both negative and positive integers.
@@ -81,15 +78,18 @@ syntax "Unit" : lait_ty
 The type of functions: `t1 -> t2` means a function that takes an argument of type `t1` and returns a value of type `t2`.
 Functions in Lait are _impure_, meaning that they can do things like access mutable state and throw errors.
 -/
-syntax lait_ty "->" lait_ty : lait_ty
+-- Right-associative and looser than `*`, as in ML: `a * b -> c -> d` is
+-- `(a * b) -> (c -> d)`.
+syntax:25 lait_ty:26 "->" lait_ty:25 : lait_ty
 /--
 The type of pairs: `t1 * t2` means a pair of values, one of type `t1` and one of type `t2`.
 -/
-syntax lait_ty "*" lait_ty : lait_ty
+-- Binds tighter than `->`, and right-associative: `a * b * c` is `a * (b * c)`, a pair
+-- whose second component is a pair.
+syntax:35 lait_ty:36 "*" lait_ty:35 : lait_ty
 syntax "(" lait_ty ")" : lait_ty
 syntax ident "<" lait_ty,* ">" : lait_ty
 syntax ident : lait_ty
-syntax "{" lait_ty_field,* "}" : lait_ty
 /--
 The type of mutable references `Ref<t>` to values of type `t`.
 - To create a new mutable reference of type `Ref<t>`, use `alloc e`, where `e` should have type `t`.
@@ -117,16 +117,6 @@ partial def firstCharUpper (i : Ident) : TermElabM _root_.Bool :=
   | none => throwError "should be unreachable"
   | some c => pure c.isUpper
 
-mutual
-
-partial def elabLaitTyField (f : Lean.TSyntax `lait_ty_field) : TermElabM (_root_.String × Surface.Ty) :=
-  match f with
-  | `(lait_ty_field | $id:ident : $t:lait_ty) => do
-    let name := id.getId.toString
-    let ty ← elabLaitTy t
-    pure (name, ty)
-  | _ => throwUnsupportedSyntax
-
 partial def elabLaitTy (t : Lean.TSyntax `lait_ty) : TermElabM Surface.Ty :=
   match t with
   | `(lait_ty | Int) => mkSurfaceTy t.raw .Int
@@ -148,14 +138,9 @@ partial def elabLaitTy (t : Lean.TSyntax `lait_ty) : TermElabM Surface.Ty :=
         mkSurfaceTy t.raw (.TApp id.getId.toString [])
       else do
         mkSurfaceTy t.raw (.Var id.getId.toString)
-  | `(lait_ty | {$fs:lait_ty_field,*}) => do
-    let fields <- fs.getElems.mapM elabLaitTyField
-    mkSurfaceTy t.raw (.Record fields.toList)
   | `(lait_ty | Ref < $t:lait_ty >) => do
     mkSurfaceTy t.raw (.Ref (← elabLaitTy t))
   | _ => throwUnsupportedSyntax
-
-end
 
 elab "{lait_ty" t:lait_ty "}" : term => do
   return toExpr (← elabLaitTy t)
@@ -172,7 +157,6 @@ declare_syntax_cat lait_match_arm
 declare_syntax_cat lait_typed_var
 declare_syntax_cat lait_param
 declare_syntax_cat lait_ident
-declare_syntax_cat lait_field
 
 syntax "_" : lait_ident
 syntax ident : lait_ident
@@ -244,9 +228,6 @@ syntax "|" ident lait_ident* "=>" lait_exp : lait_match_arm
 syntax "|" "[]" "=>" lait_exp : lait_match_arm
 syntax "|" lait_ident "::" lait_ident "=>" lait_exp : lait_match_arm
 syntax "|" "_" "=>" lait_exp : lait_match_arm
-syntax lait_exp "^" ident : lait_exp
-syntax ident ":=" lait_exp : lait_field
-syntax "{" lait_field,* "}" : lait_exp
 syntax "%" ident "{" lait_exp,* "}" : lait_exp
 syntax "[]" : lait_exp
 syntax "[" lait_exp,+ "]" : lait_exp
@@ -299,6 +280,8 @@ partial def elabLaitMatchArm (a : Lean.TSyntax `lait_match_arm) : TermElabM (Sum
   | `(lait_match_arm | | $c:ident $ids:lait_ident* => $bdy:lait_exp) => do
     let bdy <- elabLaitExp bdy
     let ids' ← ids.mapM elabLaitIdent
+    if ids'.toList.hasDup then
+      throwErrorAt a "Duplicate variables in pattern match"
     pure (.inl (c.getId.toString, ids'.toList, bdy))
   | `(lait_match_arm | | [] => $bdy:lait_exp) => do
     let bdy <- elabLaitExp bdy
@@ -308,13 +291,6 @@ partial def elabLaitMatchArm (a : Lean.TSyntax `lait_match_arm) : TermElabM (Sum
     let id' ← elabLaitIdent id
     let c' ← elabLaitIdent c
     pure (.inl ("Cons", [c', id'], bdy))
-  | _ => throwUnsupportedSyntax
-
-partial def elabLaitField (f : Lean.TSyntax `lait_field) : TermElabM (_root_.String × Surface.Exp) :=
-  match f with
-  | `(lait_field | $id:ident := $e:lait_exp) => do
-    let e ← elabLaitExp e
-    pure (id.getId.toString, e)
   | _ => throwUnsupportedSyntax
 
 partial def elabLaitListExp (stx : Lean.Syntax) (es : List (Lean.TSyntax `lait_exp)) : TermElabM Surface.Exp :=
@@ -433,11 +409,6 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
         | .inl c => ctorArms := ctorArms.push c
         | .inr w => owild := some w
       mkSurfaceExp e.raw (.Match scrut ctorArms.toList owild)
-  | `(lait_exp | {$fs:lait_field,*}) => do
-    let fields <- fs.getElems.mapM elabLaitField
-    mkSurfaceExp e.raw (.MkRecord fields.toList)
-  | `(lait_exp | $e1:lait_exp ^ $id:ident) => do
-    mkSurfaceExp e.raw (.RecordGet (← elabLaitExp e1) id.getId.toString)
   | _ => throwUnsupportedSyntax
 end
 
@@ -502,6 +473,16 @@ type BinTree<a> :=
   | BTLeaf (v : a)
   | BTNode (l : BinTree<a>) (r : BinTree<a>)
 ```
+
+A type with exactly one constructor also gets a field accessor for each of that
+constructor's named arguments.  For example
+
+```
+type Point := | MkPoint (x : Int) (y : Int)
+```
+
+defines `Point.x : Point -> Int` and `Point.y : Point -> Int` alongside `MkPoint`.
+An argument named `_` gets no accessor.
 -/
 syntax "type" : lait_type_kw
 
@@ -632,7 +613,16 @@ partial def elabLaitDecl (st : IO.Ref IncludeState) (d : Lean.TSyntax `lait_decl
       | `(lait_and_type | and $id:ident $[< $ts:ident,* >]? := $cs:lait_inductive_constr*) =>
           elabClause a id ts cs
       | _ => throwUnsupportedSyntax
-    mkSurfaceDeclEntry d.raw (.DeclEntryMutualTypes (first :: rest.toList))
+    let tys := first :: rest.toList
+    let ind ← mkSurfaceDeclEntry d.raw (.DeclEntryMutualTypes tys)
+    -- Every type in the group that has exactly one constructor also gets a field
+    -- accessor per named constructor argument.  They are emitted after the whole
+    -- group, so an accessor whose result type is a sibling still resolves.
+    let getters := tys.flatMap fun (tname, tvs, cs) =>
+      match cs with
+      | [(cname, args)] => Surface.DeclEntry.mkGetters d.raw tname tvs cname args
+      | _ => List.nil
+    mkSurfaceDeclEntry d.raw (.DeclList (ind :: getters))
   | `(lait_decl | #eval $e:lait_exp) => do
     let e ← elabLaitExp e
     mkSurfaceDeclEntry d.raw (.DeclEval e)
@@ -735,7 +725,7 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     let startEnv : TcEnv ctx.n :=
       { opMap := ctx.opMap, tyMap := ctx.tyMap, curSyntax := (← getRef)
         frozen := ctx.frozen, varMap := ctx.varMap, varLocs := ctx.varLocs
-        ctorLevels := ctx.ctorLevels, defLocs := ctx.defLocs
+        ctorLevels := ctx.ctorLevels, defLocs := ctx.defLocs, tyVarScope := {}
         -- `vars` is exactly the list of top-level `def` names accumulated so
         -- far, so the type checker's uniqueness check needs no extra state
         -- beyond the language's built-in names.

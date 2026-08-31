@@ -23,7 +23,7 @@ import Lait.Elab
   #test isEven 4 === true
   #test isOdd 4 === false
 
-  -- size over the mutually recursive trees/forests
+  -- size over the trees/forests
   def treeSize (t : Tree<a>) : Int :=
     match t with
     | Leaf v => 1

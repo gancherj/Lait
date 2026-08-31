@@ -19,7 +19,6 @@ inductive TyX : Nat -> Type where
   | Var : Fin n -> TyX n
   -- evars
   | FVar : Lean.Name -> TyX n
-  | Record : List (String × Ty n) -> TyX n
   deriving Repr, Lean.ToExpr, BEq
 end
 
@@ -75,8 +74,6 @@ inductive ExpX : Nat -> Nat -> Type where
   | Try : Exp n m -> Exp n m -> ExpX n m
   -- Runtime terms
   | Loc : Nat -> ExpX n m
-  | RecordGet : Exp n m -> String -> ExpX n m
-  | MkRecord : ExpRecord n m -> ExpX n m
   deriving Repr, Lean.ToExpr
 
 inductive ExpList : Nat -> Nat -> Type where
@@ -91,16 +88,7 @@ inductive ExpMatchCases : Nat -> Nat -> Type where
   | Wild : Exp n m -> ExpMatchCases n m
   | Cons : String -> (xs : List String) -> Exp n (m + xs.length) -> ExpMatchCases n m -> ExpMatchCases n m
 
-inductive ExpRecord : Nat -> Nat -> Type where
-  | Nil : ExpRecord n m
-  | Cons : String -> Exp n m -> ExpRecord n m -> ExpRecord n m
-
 end
-
-def ExpRecord.fromList (xs : List (String × Exp n m)) : ExpRecord n m :=
-  match xs with
-  | [] => ExpRecord.Nil
-  | (x, e) :: xs => ExpRecord.Cons x e (fromList xs)
 
 namespace Exp
 
@@ -110,15 +98,9 @@ def Pair {n m : Nat} (e1 e2 : Exp n m) : Exp n m := .mk .missing (.Pair e1 e2)
 def Var {n m : Nat} (i : Fin m) : Exp n m := .mk .missing (.Var i)
 def Op {n m : Nat} (s : String) (es : ExpList n m) : Exp n m := .mk .missing (.Op s es)
 def Loc {n m : Nat} (i : Nat) : Exp n m := .mk .missing (.Loc i)
-def MkRecord {n m : Nat} (es : List (String × Exp n m)) : Exp n m := .mk .missing (.MkRecord (ExpRecord.fromList es))
 
 end Exp
 
-
-def ExpRecord.toList (record : ExpRecord n m) : List (String × Exp n m) :=
-  match record with
-  | ExpRecord.Nil => []
-  | ExpRecord.Cons x e record => (x, e) :: toList record
 
 def ExpList.fromList (es : List (Exp n m)) : ExpList n m :=
   es.foldr ExpList.Cons ExpList.Nil
@@ -163,7 +145,6 @@ partial def Ty.rename (σ : Fin n -> Fin n') (ty : Ty n) : Ty n' :=
   | .mk stx (.Var i) => .mk stx (.Var (σ i))
   | .mk stx (.TApp s ts) => .mk stx (.TApp s (ts.attach.map fun ⟨x, _⟩ => x.rename σ))
   | .mk stx (.FVar n) => .mk stx (.FVar n)
-  | .mk stx (.Record xs) => .mk stx (.Record (xs.attach.map fun ⟨x, _⟩ => (x.1, x.2.rename σ)))
 
 mutual
   def Exp.rename (σ : Fin n -> Fin n') (σ' : Fin m -> Fin m')
@@ -188,8 +169,6 @@ mutual
     | .mk stx (.Loc i) => .mk stx (.Loc i)
     | .mk stx (.Match e cases) => .mk stx (.Match (Exp.rename σ σ' e) (ExpMatchCases.rename σ σ' cases))
     | .mk stx (.Rec x e) => .mk stx (.Rec x (Exp.rename σ (up_ren σ') e))
-    | .mk stx (.RecordGet e x) => .mk stx (.RecordGet (Exp.rename σ σ' e) x)
-    | .mk stx (.MkRecord record) => .mk stx (.MkRecord (ExpRecord.rename σ σ' record))
 
   def ExpList.rename (σ : Fin n -> Fin n') (σ' : Fin m -> Fin m')
     (expList : ExpList n m) : ExpList n' m' :=
@@ -203,12 +182,6 @@ mutual
     | ExpMatchCases.Nil => ExpMatchCases.Nil
     | ExpMatchCases.Wild e => ExpMatchCases.Wild (Exp.rename σ σ' e)
     | ExpMatchCases.Cons x xs e cases => ExpMatchCases.Cons x xs (Exp.rename σ (up_ren_sum σ' xs.length) e) (ExpMatchCases.rename σ σ' cases)
-
-  def ExpRecord.rename (σ : Fin n -> Fin n') (σ' : Fin m -> Fin m')
-    (record : ExpRecord n m) : ExpRecord n' m' :=
-    match record with
-    | ExpRecord.Nil => ExpRecord.Nil
-    | ExpRecord.Cons x e record => ExpRecord.Cons x (Exp.rename σ σ' e) (ExpRecord.rename σ σ' record)
 end
 
 partial def Ty.subst (σ : Fin n -> Ty n') (ty : Ty n) : Ty n' :=
@@ -223,7 +196,6 @@ partial def Ty.subst (σ : Fin n -> Ty n') (ty : Ty n) : Ty n' :=
   | .mk _ (.Var i) => σ i
   | .mk stx (.TApp s ts) => .mk stx (.TApp s (ts.attach.map fun ⟨x, _⟩  => x.subst σ))
   | .mk stx (.FVar n) => .mk stx (.FVar n)
-  | .mk stx (.Record xs) => .mk stx (.Record (xs.attach.map fun ⟨x, _⟩ => (x.1, x.2.subst σ)))
 
 partial def Ty.close (s : Lean.Name) (t : Ty n) : Ty (n + 1) :=
   match t with
@@ -237,7 +209,6 @@ partial def Ty.close (s : Lean.Name) (t : Ty n) : Ty (n + 1) :=
   | .mk stx (.Var i) => .mk stx (.Var (Fin.succ i))
   | .mk stx (.TApp o ts) => .mk stx (.TApp o (ts.attach.map fun ⟨x, _⟩ => x.close s))
   | .mk stx (.FVar n) => if n = s then .mk stx (.Var 0) else .mk stx (.FVar n)
-  | .mk stx (.Record xs) => .mk stx (.Record (xs.attach.map fun ⟨x, _⟩ => (x.1, x.2.close s)))
 
 mutual
   partial def Ty.substFVars [Monad M] [MonadExcept String M] (m : Lean.NameMap (TyX 0)) (t : Ty 0) : M (Ty 0) :=
@@ -259,7 +230,6 @@ mutual
       | .Prod t1 t2 => do pure $ .Prod (← Ty.substFVars m t1) (← Ty.substFVars m t2)
       | .Ref t => do pure $ .Ref (← Ty.substFVars m t)
       | .TApp s ts => do pure $ .TApp s (← ts.attach.mapM fun ⟨x, _⟩ => Ty.substFVars m x)
-      | .Record xs => do pure $ .Record (← xs.attach.mapM fun ⟨x, _⟩ => do pure (x.1, <- x.2.substFVars m))
 end
 
 
@@ -293,8 +263,6 @@ def ExpX.substTy (σ : Fin n -> Ty n') : ExpX n m -> ExpX n' m
   | .Assign e1 e2 => .Assign (Exp.substTy σ e1) (Exp.substTy σ e2)
   | .Try e1 e2 => .Try (Exp.substTy σ e1) (Exp.substTy σ e2)
   | .Loc i => .Loc i
-  | .RecordGet e x => .RecordGet (Exp.substTy σ e) x
-  | .MkRecord record => .MkRecord (ExpRecord.substTy σ record)
 
 def ExpList.substTy (σ : Fin n -> Ty n') : ExpList n m -> ExpList n' m
   | .Nil => .Nil
@@ -304,10 +272,6 @@ def ExpMatchCases.substTy (σ : Fin n -> Ty n') : ExpMatchCases n m -> ExpMatchC
   | .Nil => .Nil
   | .Wild e => .Wild (Exp.substTy σ e)
   | .Cons x xs e cases => .Cons x xs (Exp.substTy σ e) (ExpMatchCases.substTy σ cases)
-
-def ExpRecord.substTy (σ : Fin n -> Ty n') : ExpRecord n m -> ExpRecord n' m
-  | .Nil => .Nil
-  | .Cons x e record => .Cons x (Exp.substTy σ e) (ExpRecord.substTy σ record)
 end
 
 --- Conversion between surface and DB-indexed

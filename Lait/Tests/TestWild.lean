@@ -5,8 +5,7 @@ import Lait.Elab
 
   type Color := | Red | Green | Blue
 
-  -- Wildcard as the last arm makes the match exhaustive even though Green and
-  -- Blue are not listed explicitly.
+  -- A wildcard last arm makes the match exhaustive.
   def isRed (c : Color) : Bool :=
     match c with
     | Red => true
@@ -17,7 +16,7 @@ import Lait.Elab
   #eval isRed Green                                      -- false
   #eval isRed Blue                                       -- false
 
-  -- A wildcard-only match: binds nothing, always succeeds.
+  -- Wildcard-only: binds nothing, always succeeds.
   def always (c : Color) : Int :=
     match c with
     | _ => 42

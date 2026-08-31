@@ -16,8 +16,7 @@ import Lait.Elab
   def blah2 := true
 
   def foo := blah2
-  -- Including `tst2` again is a no-op: were its declarations spliced in twice,
-  -- `blah` would be a duplicate top-level definition.
+  -- A no-op: spliced in twice, `blah` would be a duplicate definition.
   #include tst2
 
   #eval foo
@@ -35,8 +34,7 @@ import Lait.Elab
     end
 
 
-  -- Needs to be better printed, but shows:
-  -- ∀ a0. (List<#0> -> Int)
+  -- List<a> -> Int
   #check length
 
   -- Val.VConst (Const.Nat 2)

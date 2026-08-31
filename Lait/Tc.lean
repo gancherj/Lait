@@ -51,6 +51,16 @@ structure TcEnv (n : Nat) where
   -- `mkConstrFns` generates.  Applying one of those is non-expansive, so the value
   -- restriction needs to tell them apart from ordinary functions; see `Exp.isValue`.
   ctorLevels : Std.TreeSet Nat
+  -- The explicit type variables scoped at an enclosing declaration: the `U` component
+  -- of an SML context (Definition, sections 4.6 and 4.10, rule 15).  A declaration's
+  -- own type variables -- the ones it declares, plus every one written in an
+  -- annotation that is not part of a smaller declaration (`Exp.unguardedTyVars`) --
+  -- are *rigid* while its bound expression is checked: the caller chooses them, so
+  -- unification may not instantiate them (`solveAux`) and an inner `let` may not
+  -- generalize them (`envFVars`).  The declaration that scopes them quantifies them
+  -- itself, which is why its closure is taken in the enclosing environment, where
+  -- they are absent.
+  tyVarScope : Lean.NameSet
 
 -- Does `s` name a data constructor of an inductive type, as opposed to one of the
 -- primitive operators (`+`, `==`, ...) that also live in `opMap`?
@@ -71,6 +81,12 @@ abbrev Constraint := Lean.Syntax × TyX 0 × TyX 0
 
 structure TcState where
   constraints : List Constraint := []
+  -- The solution of every constraint solved so far, in the declaration being checked.
+  -- Generalizing at a `let` (`Exp.infer`) means knowing the bound expression's type
+  -- there, so constraints are solved at each `let` rather than once per declaration,
+  -- and each solution has to be kept: it applies to the types the surrounding
+  -- expressions have already built.  Idempotent, and extended only by `solveAll`.
+  subst : Lean.NameMap (TyX 0) := {}
   freshCounter : Nat := 0
   -- Hovers to attach once the constraints are solved: the syntax of an expression, its
   -- type, and -- for a variable occurrence -- the location of the binding it resolves to.
@@ -106,13 +122,6 @@ partial def normalizeTyX (stx : Lean.Syntax) (t : TyX k) : Check n (TyX k) :=
     | .Arrow t1 t2  => do let t1' ← normalizeTy t1; let t2' ← normalizeTy t2; pure (.Arrow t1' t2')
     | .Prod t1 t2 => do let t1' ← normalizeTy t1; let t2' ← normalizeTy t2; pure (.Prod t1' t2')
     | .Ref t => do let t' ← normalizeTy t; pure (.Ref t')
-    | .Record xs => do
-       let xs' <- xs.mapM (fun (x, y) => do
-        let y' ← normalizeTy y
-        pure (x, y'))
-       if (xs'.map Prod.fst).hasDup then throwErrorAt stx s!"Duplicate field name in record"
-       let xs' := xs'.mergeSort (fun x y => x.1 <= y.1)
-       pure (.Record xs')
     | .TApp s ts => do
         let ts <- ts.mapM normalizeTy
         match (← read).tyMap.get? s with
@@ -135,11 +144,70 @@ partial def Ty.fvars : Ty n → Lean.NameSet
 
 partial def TyX.fvars : TyX n → Lean.NameSet
   | .FVar n => Lean.NameSet.empty.insert n
-  | .Record xs => xs.foldl (fun s x => s.union (Ty.fvars x.2)) {}
   | .Arrow t1 t2 | .Prod t1 t2 => (Ty.fvars t1).union (Ty.fvars t2)
   | .Ref t => Ty.fvars t
   | .TApp _ ts => ts.foldl (fun s t => s.union (Ty.fvars t)) {}
   | .Var _ | .Int | .Bool | .Str | .Unit => {}
+end
+
+-- ---- Explicit type variables ----
+
+-- The explicit type variables that this expression contributes to the `tyvarseq` of the
+-- declaration it belongs to.  Section 4.6 of the Definition: an occurrence of a type
+-- variable is *unguarded* in a declaration when it is not part of a smaller declaration
+-- inside it, and a variable is scoped at the innermost declaration in which it occurs
+-- unguarded.
+--
+-- Lait's declarations are `def` and `let`, and its only annotation positions are the
+-- ones on `fun` and `let` binders.  So this collects the variables of every `fun`
+-- annotation, and descends into a `let`'s body but not into its bound expression or
+-- annotation -- those belong to the `let`'s own declaration, which scopes them itself.
+--
+-- Every `FVar` reached here was written by the user: the internal unification variables
+-- `freshTyName` makes only come into existence during inference.
+--
+-- One wrinkle: a `let` a surface pass synthesized stands for no declaration the user
+-- wrote, so it scopes nothing.  `elabDefMutual` pins a function's declared return type
+-- with a `let`, and the variables of *that* annotation belong to the `def` -- otherwise
+-- `def newStack () : Stack<a> := alloc []` would be read as SML reads
+-- `fn () => let val ret : 'a stack = ref [] in ret end`, whose inner declaration the
+-- value restriction forbids.  A `$` cannot occur in a source name.
+def isSyntheticBinder (x : String) : Bool := x.startsWith "$"
+
+mutual
+partial def Exp.unguardedTyVars : Exp n m → Lean.NameSet
+  | .mk _ x => ExpX.unguardedTyVars x
+
+partial def ExpX.unguardedTyVars : ExpX n m → Lean.NameSet
+  | .Lam _ oty e => ((oty.map Ty.fvars).getD {}).union (Exp.unguardedTyVars e)
+  | .Let x oty e1 e2 =>
+    if isSyntheticBinder x then
+      (Exp.letTyVars x oty e1).union (Exp.unguardedTyVars e2)
+    else Exp.unguardedTyVars e2
+  | .App e1 e2 | .Pair e1 e2 | .Assign e1 e2 | .Try e1 e2 =>
+    (Exp.unguardedTyVars e1).union (Exp.unguardedTyVars e2)
+  | .If e1 e2 e3 =>
+    ((Exp.unguardedTyVars e1).union (Exp.unguardedTyVars e2)).union (Exp.unguardedTyVars e3)
+  | .Rec _ e | .Error e | .Print e | .Fst e | .Snd e | .Alloc e | .Deref e =>
+    Exp.unguardedTyVars e
+  | .Op _ es => ExpList.unguardedTyVars es
+  | .Match e cs => (Exp.unguardedTyVars e).union (ExpMatchCases.unguardedTyVars cs)
+  | .Const _ | .Var _ | .Loc _ => {}
+
+partial def ExpList.unguardedTyVars : ExpList n m → Lean.NameSet
+  | .Nil => {}
+  | .Cons e es => (Exp.unguardedTyVars e).union (ExpList.unguardedTyVars es)
+
+partial def ExpMatchCases.unguardedTyVars : ExpMatchCases n m → Lean.NameSet
+  | .Nil => {}
+  | .Wild e => Exp.unguardedTyVars e
+  | .Cons _ _ e cs => (Exp.unguardedTyVars e).union (ExpMatchCases.unguardedTyVars cs)
+
+-- The explicit type variables scoped at the declaration `let x : oty := e1`, before
+-- removing the ones an enclosing declaration already scopes.
+partial def Exp.letTyVars (x : String) (oty : Option (Ty n)) (e1 : Exp n m) : Lean.NameSet :=
+  if isSyntheticBinder x then {}
+  else ((oty.map Ty.fvars).getD {}).union (Exp.unguardedTyVars e1)
 end
 
 def withVar (ty : TyScheme) (loc? : Option DeclarationLocation)
@@ -153,9 +221,15 @@ def withVar (ty : TyScheme) (loc? : Option DeclarationLocation)
     varLocs := env.varLocs.cons loc?,
     defLocs := env.defLocs,
     defNames := env.defNames,
+    tyVarScope := env.tyVarScope,
     -- The binding being pushed sits at index 0, i.e. at level `n`.
     ctorLevels := if isCtor then env.ctorLevels.insert n else env.ctorLevels
   }
+
+/-- Bring the explicit type variables `us` into scope, i.e. SML's `C ⊕ U`.  Used by
+every declaration form for the variables it scopes; see `TcEnv.tyVarScope`. -/
+def withTyVarScope (us : Lean.NameSet) (k : Check n α) : Check n α :=
+  withReader (fun env => { env with tyVarScope := env.tyVarScope.union us }) k
 
 /-- The "go to definition" target of a binding introduced by `stx`.  `stx` belongs to the
 file being elaborated (declarations from other modules have no positions), so its own start
@@ -257,7 +331,6 @@ mutual
     | .Ref t => Ty.occurs s t
     | .TApp _ ts => ts.attach.any (fun ⟨x, _⟩ => Ty.occurs s x)
     | .Var _ | .Int | .Bool | .Str | .Unit => false
-    | .Record xs => xs.attach.any (fun ⟨x, _⟩ => Ty.occurs s x.2)
 end
 
 
@@ -275,44 +348,51 @@ def tyVarName (i : Nat) :=
 
 
 
+-- Types print with only the parentheses their structure needs, following the same
+-- grammar `lait_ty` parses: `->` and `*` are both right-associative and `*` binds
+-- tighter, so `a * b -> c -> d` reads as `(a * b) -> (c -> d)` and prints back that
+-- way.  `prec` is the level the surrounding context requires -- 0 anywhere, 1 tighter
+-- than `->`, 2 atomic -- and a type is parenthesized when its own level is lower.
 mutual
-partial def Ty.pretty : Ty 0 → String
-  | .mk _ t => TyX.pretty t
+partial def Ty.prettyPrec (prec : Nat) : Ty 0 → String
+  | .mk _ t => TyX.prettyPrec prec t
 
-partial def TyX.pretty : TyX 0 → String
+partial def TyX.prettyPrec (prec : Nat) : TyX 0 → String
   | .Int => "Int"
   | .Bool => "Bool"
   | .Str => "String"
   | .Unit => "Unit"
-  | .Arrow t1 t2 => s!"({Ty.pretty t1} -> {Ty.pretty t2})"
-  | .Prod t1 t2 => s!"({Ty.pretty t1} * {Ty.pretty t2})"
-  | .Ref t => s!"Ref<{Ty.pretty t}>"
+  | .Arrow t1 t2 =>
+    let s := s!"{Ty.prettyPrec 1 t1} -> {Ty.prettyPrec 0 t2}"
+    if prec > 0 then s!"({s})" else s
+  | .Prod t1 t2 =>
+    let s := s!"{Ty.prettyPrec 2 t1} * {Ty.prettyPrec 1 t2}"
+    if prec > 1 then s!"({s})" else s
+  | .Ref t => s!"Ref<{Ty.prettyPrec 0 t}>"
   | .Var i => s!"#{i.val}"
   | .FVar n => s!"{n}"
   | .TApp s [] => s
-  | .TApp s ts => s!"{s}<{",".intercalate (ts.attach.map fun ⟨x, _⟩ => Ty.pretty x)}>"
-  | .Record xs =>
-     "{" ++ (String.intercalate ", " (xs.map fun x => s!"{x.1}: {Ty.pretty x.2}")) ++ "}"
-
-
-partial def TyScheme.pretty : TyScheme → String
-  | { tyVars := tyVars, ty := ty } =>
-    let ty0 : Ty 0 := ty.subst (fun i => .mk .missing $ TyX.FVar (Name.mkSimple (tyVarName i)))
-    let varNames := tyVars.mapIdx (fun i _ => tyVarName i)
-    if varNames.isEmpty then
-      Ty.pretty ty0
-    else
-      s!"∀ {",".intercalate varNames}. {Ty.pretty ty0}"
-
+  | .TApp s ts => s!"{s}<{",".intercalate (ts.attach.map fun ⟨x, _⟩ => Ty.prettyPrec 0 x)}>"
 end
 
--- Render the type of a binding whose variables the value restriction refused to
--- generalize.  Those variables are not quantified -- each is an as-yet-unknown
--- but fixed type -- so they print as `_a`, `_b`, ... rather than under a `∀`,
--- following OCaml's notation for the same thing.
-def TyScheme.prettyWeak : TyScheme → String
+def Ty.pretty (t : Ty 0) : String := Ty.prettyPrec 0 t
+def TyX.pretty (t : TyX 0) : String := TyX.prettyPrec 0 t
+
+-- Render a type scheme, naming its quantified variables `a`, `b`, ... prefixed by
+-- `pfx`.  There is no `∀`: a scheme is written just like the type it generalizes, as
+-- SML writes it (`val id = fn : 'a -> 'a`), and it is the *names* that say which
+-- variables are quantified -- see `TyScheme.prettyWeak`.
+def TyScheme.prettyWith (pfx : String) : TyScheme → String
   | { tyVars := _, ty := ty } =>
-    Ty.pretty (ty.subst (fun i => .mk .missing $ TyX.FVar (Name.mkSimple s!"{tyVarName i}")))
+    Ty.pretty (ty.subst (fun i => .mk .missing $ TyX.FVar (Name.mkSimple (pfx ++ tyVarName i))))
+
+def TyScheme.pretty : TyScheme → String := TyScheme.prettyWith ""
+
+-- Render the type of a binding whose variables the value restriction refused to
+-- generalize.  Those variables are not quantified -- each is an as-yet-unknown but
+-- fixed type -- so they print as `_a`, `_b`, ..., following OCaml's notation for the
+-- same thing.
+def TyScheme.prettyWeak : TyScheme → String := TyScheme.prettyWith "_"
 
 -- ---- Pure substitution (forward declaration) ----
 mutual
@@ -330,7 +410,6 @@ partial def TyX.substFVarsP' (m : Lean.NameMap (TyX 0)) : TyX 0 → TyX 0
   | .Prod t1 t2 => .Prod (Ty.substFVarsP' m t1) (Ty.substFVarsP' m t2)
   | .Ref t => .Ref (Ty.substFVarsP' m t)
   | .TApp s ts => .TApp s (ts.attach.map fun ⟨x, _⟩ => Ty.substFVarsP' m x)
-  | .Record xs => .Record (xs.map fun (x, y) => (x, Ty.substFVarsP' m y))
 end
 
 -- ---- Unification ----
@@ -343,16 +422,23 @@ def Lean.Name.isTcFresh : Lean.Name → Bool
   | .num (.str .anonymous "_tcFresh") _ => true
   | _ => false
 
--- Assumes the type is already normalized.
-partial def solveAux : List Constraint → List (Lean.Name × TyX 0) →
+-- Assumes the type is already normalized.  `rigid` holds the explicit type variables
+-- in scope (`TcEnv.tyVarScope`): those stand for a type the caller of the enclosing
+-- declaration chooses, so unification may not instantiate them -- an SML type variable
+-- is a semantic object of its own, not an unknown to be solved for.
+partial def solveAux (rigid : Lean.NameSet) : List Constraint → List (Lean.Name × TyX 0) →
     Check n (List (Lean.Name × TyX 0))
   | [], sbst => pure sbst
   | (stx, t1, t2) :: cs, sbst => do
-    if t1 == t2 then solveAux cs sbst
+    if t1 == t2 then solveAux rigid cs sbst
     else
       let elimFVar {k} (n : Lean.Name) (t : TyX 0) :
           Check k (List (Lean.Name × TyX 0)) := do
-        if t.occurs n then
+        if rigid.contains n then
+          throwErrorAt stx s!"Cannot make the type variable {n} equal to {TyX.pretty t}: \
+            {n} is chosen by whoever uses this definition, so its body cannot require \
+            it to be {TyX.pretty t}"
+        else if t.occurs n then
           throwErrorAt stx s!"Occurs check failed: {n} occurs in {TyX.pretty t}"
         else
           let sbst1 : Lean.NameMap (TyX 0) := Lean.NameMap.insert {} n t
@@ -360,51 +446,77 @@ partial def solveAux : List Constraint → List (Lean.Name × TyX 0) →
             (s, TyX.substFVarsP' sbst1 x, TyX.substFVarsP' sbst1 y))
           let sbst' : List (Lean.Name × TyX 0) :=
             sbst.map fun (m, u) => (m, TyX.substFVarsP' sbst1 u)
-          solveAux cs' ((n, t) :: sbst')
+          solveAux rigid cs' ((n, t) :: sbst')
       match t1, t2 with
       | .FVar n, .FVar m =>
-        -- Keep the user-facing name when exactly one side is an internal var.
-        if n.isTcFresh then elimFVar n (.FVar m) else elimFVar m (.FVar n)
+        -- Eliminate a variable that is free to be instantiated -- never a rigid one --
+        -- and among those the internal one, so that a user-facing name survives into
+        -- the types shown in errors and hovers.
+        if rigid.contains n && rigid.contains m then
+          throwErrorAt stx s!"Cannot make the type variables {n} and {m} equal: each is \
+            chosen separately by whoever uses this definition"
+        else if rigid.contains n then elimFVar m (.FVar n)
+        else if rigid.contains m then elimFVar n (.FVar m)
+        else if n.isTcFresh then elimFVar n (.FVar m) else elimFVar m (.FVar n)
       | .FVar n, t => elimFVar n t
       | t, .FVar n => elimFVar n t
       | .Var i, _ => nomatch i
       | _, .Var i => nomatch i
       | .Arrow a1 b1, .Arrow a2 b2 =>
-        solveAux ((stx, a1.get, a2.get) :: (stx, b1.get, b2.get) :: cs) sbst
+        solveAux rigid ((stx, a1.get, a2.get) :: (stx, b1.get, b2.get) :: cs) sbst
       | .Prod a1 b1, .Prod a2 b2 =>
-        solveAux ((stx, a1.get, a2.get) :: (stx, b1.get, b2.get) :: cs) sbst
+        solveAux rigid ((stx, a1.get, a2.get) :: (stx, b1.get, b2.get) :: cs) sbst
       | .Ref a, .Ref b =>
-        solveAux ((stx, a.get, b.get) :: cs) sbst
+        solveAux rigid ((stx, a.get, b.get) :: cs) sbst
       | .TApp s1 t1s, .TApp s2 t2s => do
         if s1 = s2 ∧ t1s.length = t2s.length then
           let extra : List Constraint :=
             ((t1s.map Ty.get).zip (t2s.map Ty.get)).map (fun ⟨a, b⟩ => (stx, a, b))
-          solveAux (extra ++ cs) sbst
+          solveAux rigid (extra ++ cs) sbst
         else
           throwErrorAt stx s!"Cannot unify {TyX.pretty t1} with {TyX.pretty t2}"
-      | .Record xs, .Record ys => do
-          let xs := xs.mergeSort (fun x y => x.1 <= y.1)
-          let ys := ys.mergeSort (fun x y => x.1 <= y.1)
-          if xs.map Prod.fst = ys.map Prod.fst then
-            let extra : List Constraint :=
-              (xs.zip ys).map fun ⟨(_, y), (_, w)⟩ => (stx, y.get, w.get)
-            solveAux (extra ++ cs) sbst
-          else
-            throwErrorAt stx s!"Cannot unify {TyX.pretty t1} with {TyX.pretty t2}"
       | _, _ =>
         throwErrorAt stx s!"Cannot unify {TyX.pretty t1} with {TyX.pretty t2}"
 
--- Solve all currently-buffered constraints, returning a substitution.
+-- Solve all currently-buffered constraints and fold the solution into the substitution
+-- accumulated in the state, which is returned.  This runs wherever a type has to be
+-- *known* rather than merely built: at every `let`, whose bound expression is
+-- generalized there, and at the end of a declaration.
 def solveAll : Check n (Lean.NameMap (TyX 0)) := do
-  let cs := (← get).constraints
-  let cs <- cs.mapM fun (stx, t1, t2) => do pure (stx, ← normalizeTyX stx t1, ← normalizeTyX stx t2)
+  let st ← get
+  let sbst0 := st.subst
+  -- A constraint may have been recorded before an earlier solve resolved some of its
+  -- variables, so the solution so far applies to it first.
+  let cs <- st.constraints.mapM fun (stx, t1, t2) => do
+    pure (stx, ← normalizeTyX stx (TyX.substFVarsP' sbst0 t1),
+               ← normalizeTyX stx (TyX.substFVarsP' sbst0 t2))
   modify fun s => { s with constraints := [] }
-  let sbst ← solveAux cs []
-  pure (sbst.foldl (fun (m : Lean.NameMap (TyX 0)) (n, t) => m.insert n t)
-    (Lean.mkNameMap (TyX 0)))
+  let solved ← solveAux (← read).tyVarScope cs []
+  -- Those constraints had `sbst0` applied, so no variable `sbst0` resolves can appear
+  -- in `solved`'s domain: composing the two is `solved` on `sbst0`'s range, then union.
+  let solved : Lean.NameMap (TyX 0) :=
+    solved.foldl (fun (m : Lean.NameMap (TyX 0)) (n, t) => m.insert n t)
+      (Lean.mkNameMap (TyX 0))
+  let composed := sbst0.foldl
+    (fun (m : Lean.NameMap (TyX 0)) n t => m.insert n (TyX.substFVarsP' solved t)) solved
+  modify fun s => { s with subst := composed }
+  pure composed
 
+-- The type variables that generalization here must leave alone: those free in the type
+-- of an in-scope binding, and the explicit ones an enclosing declaration scopes --
+-- together, `tyvars(C)` of the Definition's closure operation (section 4.8).
+--
+-- `TcEnv.frozen` records each binding's variables as they stood when it was pushed, so
+-- the substitution accumulated since has to be applied before they are read: a variable
+-- that has since been resolved is no longer free in the environment, but the variables
+-- of the type it was resolved to are.
 def envFVars : Check n Lean.NameSet := do
-  pure (← read).frozen
+  let env ← read
+  let sbst := (← get).subst
+  pure (env.frozen.foldl (init := env.tyVarScope) fun acc nm =>
+    match sbst.get? nm with
+    | some t => acc.union (TyX.fvars t)
+    | none => acc.insert nm)
 
 -- ---- Initial environment ----
 def initTcOpMap : Std.TreeMap String OpSig :=
@@ -466,6 +578,132 @@ def ctorTypeInfo (cname : String) (stx : Lean.Syntax) :
       | _ => throwErrorAt stx s!"Constructor {cname} does not belong to an inductive type"
     | _ => throwErrorAt stx s!"Constructor {cname} does not belong to an inductive type"
 
+-- ---- The value restriction ----
+
+-- The context a value test descends into: `isCtor` says which `Op` names are data
+-- constructors rather than primitives like `+`, and `isCtorVar` which in-scope
+-- variables are the constructor functions `mkConstrFns` generates.  `TcEnv` supplies
+-- both (`TcEnv.valueCtx`); they are packaged together so that the mutual block below
+-- can thread them under binders, where `isCtorVar` shifts.
+structure ValueCtx (m : Nat) where
+  isCtor : String → Bool
+  isCtorVar : Fin m → Bool
+
+-- Extend a `ValueCtx` under a binder: the newly bound variable, at index 0, is not
+-- a constructor, and every old index shifts up by one.
+def ValueCtx.under (c : ValueCtx m) : ValueCtx (m + 1) :=
+  { isCtor := c.isCtor, isCtorVar := Fin.cases false c.isCtorVar }
+
+def TcEnv.valueCtx (env : TcEnv n) : ValueCtx n :=
+  { isCtor := env.isCtorName, isCtorVar := env.isCtorVar }
+
+mutual
+  -- Is `e` a syntactic value ("non-expansive", in the SML sense)?  Evaluating one of
+  -- these allocates no reference cells and performs no other effect, which is what
+  -- makes it sound to generalize its type variables; see the `DeclDef` case of
+  -- `Decl.check`.
+  def Exp.isValue (c : ValueCtx m) : Exp n m → Bool
+    | .mk _ x => ExpX.isValue c x
+
+  def ExpX.isValue (c : ValueCtx m) : ExpX n m → Bool
+    | .Const _ | .Var _ | .Lam .. | .Loc _ => true
+    -- `rec x => e` builds a closure without running `e` (see `Exp.eval`), but a
+    -- projection below may force it later, so `e` must be non-expansive too.
+    | .Rec _ e => Exp.isValue c.under e
+    | .Pair e1 e2 => Exp.isValue c e1 && Exp.isValue c e2
+    -- Projecting out of a value neither allocates nor has an effect.  These are not
+    -- values in SML -- which has no projection forms -- but they are how
+    -- `elabDefMutual` pulls each function out of its recursive bundle, so ruling them
+    -- out would make every `and` group monomorphic.
+    | .Fst e | .Snd e => Exp.isValue c e
+    | .Let _ _ e1 e2 => Exp.isValue c e1 && Exp.isValue c.under e2
+    | .Op s es => c.isCtor s && ExpList.isValue c es
+    -- A constructor application is non-expansive when its arguments are: it only
+    -- builds the constructed value (or, if partial, a closure).  Every other
+    -- application may run arbitrary code, so it is expansive.
+    | .App e1 e2 => Exp.isCtorApp c e1 && Exp.isValue c e2
+    | .If .. | .Error _ | .Print _ | .Match .. | .Alloc _ | .Deref _
+    | .Assign .. | .Try .. => false
+
+  -- Is `e` a constructor applied to (possibly zero) values, i.e. the head of an
+  -- application spine that is safe to apply one more value to?  Surface `Cons h t`
+  -- reaches the type checker as nested `App`s of the generated `def Cons`, not as an
+  -- `Op`, so this is what makes `def empty := Map []` generalize.
+  def Exp.isCtorApp (c : ValueCtx m) : Exp n m → Bool
+    | .mk _ (.Var i) => c.isCtorVar i
+    | .mk _ (.App e1 e2) => Exp.isCtorApp c e1 && Exp.isValue c e2
+    | _ => false
+
+  def ExpList.isValue (c : ValueCtx m) : ExpList n m → Bool
+    | .Nil => true
+    | .Cons e es => Exp.isValue c e && ExpList.isValue c es
+end
+
+-- ---- Generalization ----
+
+-- Close gens[0] outermost (Var 0 in the resulting scheme), gens[1] next, etc.
+def closeMany : (gs : List Lean.Name) → Ty 0 → Ty gs.length
+  | [], t => t
+  | g :: gs, t => (closeMany gs t).close g
+
+def Ty.generalize (frozen : Lean.NameSet) (t : Ty 0) : TyScheme :=
+  let gens := (Ty.fvars t).toList.filter (fun n => !frozen.contains n)
+  let closed : Ty gens.length := closeMany gens t
+  let tyVars : List String := gens.mapIdx (fun i _ => s!"a{i}")
+  have hlen : tyVars.length = gens.length := by
+    simp [tyVars]
+  { tyVars := tyVars, ty := hlen ▸ closed }
+
+def applySubstTy (sbst : Lean.NameMap (TyX 0)) (t : Ty 0) :
+    Check n (Ty 0) :=
+  normalizeTy (Ty.substFVarsP' sbst t)
+
+-- Apply the substitution accumulated so far.  A type is built before the constraints
+-- that determine it are solved, so anything that gets *inspected* -- generalized,
+-- printed, or compared against the environment -- has to be run through it first.
+def applyCurSubst (t : Ty 0) : Check n (Ty 0) := do
+  applySubstTy (← get).subst t
+
+-- The Definition's closure operation `Clos_{C,valbind}` (section 4.8) for one binding.
+--
+-- `t` is the type inferred for the bound expression, with the constraints in scope
+-- already solved; `envFV` the type variables of the enclosing context `C` (`envFVars`);
+-- `us` the explicit type variables this declaration scopes, which `C` therefore does
+-- not contain; and `isVal` whether the bound expression is non-expansive.  A
+-- non-expansive binding quantifies every variable not fixed by `C`; an expansive one
+-- quantifies nothing -- the value restriction.
+--
+-- Rule 15's side condition `U ∩ tyvars(VE') = ∅` is what the check below enforces: a
+-- type variable the user wrote must come out quantified.  If the value restriction left
+-- it un-quantified it would instead escape as a fixed-but-unknown type, and the
+-- signature would silently mean something other than what it says.
+def closeBinding (stx : Lean.Syntax) (name : String) (us envFV : Lean.NameSet)
+    (isVal : Bool) (t : Ty 0) : Check n TyScheme := do
+  let scheme := if isVal then Ty.generalize envFV t else TyScheme.mono t
+  unless us.isEmpty do
+    let escaped := (Ty.fvars scheme.ty).toList.filter us.contains
+    unless escaped.isEmpty do
+      let vars := ", ".intercalate (escaped.map toString)
+      let why := if isVal then "the surrounding context already fixes it"
+        else s!"the body of {name} is not a value, so the value restriction cannot \
+          quantify it"
+      let out := if isVal then "" else
+        ", or make its body a value (for instance by turning it into a function)"
+      throwErrorAt stx s!"The type variable(s) {vars} written in the type of {name} \
+        cannot be generalized here: {why}.  Give {name} a type that does not mention \
+        {vars}{out}."
+  pure scheme
+
+-- Drop the part of the accumulated substitution that nothing can refer to any more.
+-- Called once a top-level declaration is finished, when the only types left are the
+-- schemes in the environment: `TcEnv.frozen` names their free variables, and one that
+-- is not among them can never be looked up again.  In practice every top-level scheme
+-- is closed -- `Decl.check` rejects a declaration that would leave a free variable
+-- behind -- so this empties the substitution between declarations.
+def pruneSubst : Check n Unit := do
+  let frozen := (← read).frozen
+  modify fun s => { s with subst := s.subst.filter (fun nm _ => frozen.contains nm) }
+
 -- ---- Inference (constraint generation) ----
 
 def checkBannedLetName (stx : Lean.Syntax) (n : String) : Check m Unit := do
@@ -505,11 +743,29 @@ mutual
         pure r
       | .mk stx (.Let n oty e1 e2) => do
         checkBannedLetName stx n
-        let t1 ← Exp.infer e1
-        match oty with
-        | none => pure ()
-        | some t => do let t ← normalizeTy t; addConstraint stx t1 t
-        withVar (TyScheme.mono t1) (← Check.locOf stx) (Exp.infer e2)
+        -- `let n : oty := e1 in e2` is the Definition's `let val n : oty = e1 in e2 end`
+        -- (rules 4 and 15): a declaration, so its bound expression is generalized here.
+        --
+        -- The explicit type variables this declaration scopes are rigid while `e1` is
+        -- checked, and quantified by the closure below; the ones an enclosing
+        -- declaration already scopes are not among them (section 4.6).
+        let outerUs := (← read).tyVarScope
+        let us := (Exp.letTyVars n oty e1).filter (fun nm => !outerUs.contains nm)
+        let t1 ← withTyVarScope us do
+          let t1 ← Exp.infer e1
+          match oty with
+          | none => pure ()
+          | some t => do let t ← normalizeTy t; addConstraint stx t1 t
+          -- Closing over `t1` means knowing it, so the constraints in scope are solved
+          -- here rather than at the end of the declaration.
+          let _ ← solveAll
+          applyCurSubst t1
+        -- `envFVars` is read outside `withTyVarScope`, since the closure is taken in
+        -- the context `C` that this declaration extends -- `us` is what it quantifies.
+        let envFV ← envFVars
+        let isVal := Exp.isValue (← read).valueCtx e1
+        let scheme ← closeBinding stx n us envFV isVal t1
+        withVar scheme (← Check.locOf stx) (Exp.infer e2)
       | .mk stx (.If e1 e2 e3) => do
         let t1 ← Exp.infer e1
         let t2 ← Exp.infer e2
@@ -585,16 +841,6 @@ mutual
         let resTy ← freshTy stx
         Exp.inferCases cases scrutTy resTy stx []
         pure resTy
-      | .mk stx (.MkRecord es) => do
-        let ts <- es.toList.mapM (fun (s, e) => do pure (s, <- Exp.infer e))
-        pure (.mk stx (.Record ts))
-      | .mk stx (.RecordGet e x) => do
-        let t <- Exp.infer e
-        match t with
-        | .mk _ (.Record xs) => match xs.find? (fun (s, _) => s = x) with
-          | some (_, t) => pure t
-          | none => throwErrorAt stx s!"Field {x} not found in record"
-        | _ => throwErrorAt stx s!"Record get of non-record"
     -- A variable occurrence points at its binding; any other expression has no target.
     let loc? ← match e with
       | .mk _ (.Var i) => pure ((← read).varLocs.get i)
@@ -655,172 +901,119 @@ mutual
           Exp.inferWithVars (m := m + 1) ts loc? (body.cast (by simp; omega))
 end
 
--- ---- The value restriction ----
-
--- The context a value test descends into: `isCtor` says which `Op` names are data
--- constructors rather than primitives like `+`, and `isCtorVar` which in-scope
--- variables are the constructor functions `mkConstrFns` generates.  `TcEnv` supplies
--- both (`TcEnv.valueCtx`); they are packaged together so that the mutual block below
--- can thread them under binders, where `isCtorVar` shifts.
-structure ValueCtx (m : Nat) where
-  isCtor : String → Bool
-  isCtorVar : Fin m → Bool
-
--- Extend a `ValueCtx` under a binder: the newly bound variable, at index 0, is not
--- a constructor, and every old index shifts up by one.
-def ValueCtx.under (c : ValueCtx m) : ValueCtx (m + 1) :=
-  { isCtor := c.isCtor, isCtorVar := Fin.cases false c.isCtorVar }
-
-def TcEnv.valueCtx (env : TcEnv n) : ValueCtx n :=
-  { isCtor := env.isCtorName, isCtorVar := env.isCtorVar }
-
-mutual
-  -- Is `e` a syntactic value ("non-expansive", in the SML sense)?  Evaluating one of
-  -- these allocates no reference cells and performs no other effect, which is what
-  -- makes it sound to generalize its type variables; see the `DeclDef` case of
-  -- `Decl.check`.
-  def Exp.isValue (c : ValueCtx m) : Exp n m → Bool
-    | .mk _ x => ExpX.isValue c x
-
-  def ExpX.isValue (c : ValueCtx m) : ExpX n m → Bool
-    | .Const _ | .Var _ | .Lam .. | .Loc _ => true
-    -- `rec x => e` builds a closure without running `e` (see `Exp.eval`), but a
-    -- projection below may force it later, so `e` must be non-expansive too.
-    | .Rec _ e => Exp.isValue c.under e
-    | .Pair e1 e2 => Exp.isValue c e1 && Exp.isValue c e2
-    -- Projecting out of a value neither allocates nor has an effect.  These are not
-    -- values in SML -- which has no projection forms -- but they are how
-    -- `elabDefMutual` pulls each function out of its recursive bundle, so ruling them
-    -- out would make every `and` group monomorphic.
-    | .Fst e | .Snd e | .RecordGet e _ => Exp.isValue c e
-    | .MkRecord es => ExpRecord.isValue c es
-    | .Let _ _ e1 e2 => Exp.isValue c e1 && Exp.isValue c.under e2
-    | .Op s es => c.isCtor s && ExpList.isValue c es
-    -- A constructor application is non-expansive when its arguments are: it only
-    -- builds the constructed value (or, if partial, a closure).  Every other
-    -- application may run arbitrary code, so it is expansive.
-    | .App e1 e2 => Exp.isCtorApp c e1 && Exp.isValue c e2
-    | .If .. | .Error _ | .Print _ | .Match .. | .Alloc _ | .Deref _
-    | .Assign .. | .Try .. => false
-
-  -- Is `e` a constructor applied to (possibly zero) values, i.e. the head of an
-  -- application spine that is safe to apply one more value to?  Surface `Cons h t`
-  -- reaches the type checker as nested `App`s of the generated `def Cons`, not as an
-  -- `Op`, so this is what makes `def empty := Map []` generalize.
-  def Exp.isCtorApp (c : ValueCtx m) : Exp n m → Bool
-    | .mk _ (.Var i) => c.isCtorVar i
-    | .mk _ (.App e1 e2) => Exp.isCtorApp c e1 && Exp.isValue c e2
-    | _ => false
-
-  def ExpList.isValue (c : ValueCtx m) : ExpList n m → Bool
-    | .Nil => true
-    | .Cons e es => Exp.isValue c e && ExpList.isValue c es
-
-  def ExpRecord.isValue (c : ValueCtx m) : ExpRecord n m → Bool
-    | .Nil => true
-    | .Cons _ e es => Exp.isValue c e && ExpRecord.isValue c es
-end
-
--- ---- Generalization ----
-
--- Close gens[0] outermost (Var 0 in the resulting scheme), gens[1] next, etc.
-def closeMany : (gs : List Lean.Name) → Ty 0 → Ty gs.length
-  | [], t => t
-  | g :: gs, t => (closeMany gs t).close g
-
-def Ty.generalize (frozen : Lean.NameSet) (t : Ty 0) : TyScheme :=
-  let gens := (Ty.fvars t).toList.filter (fun n => !frozen.contains n)
-  let closed : Ty gens.length := closeMany gens t
-  let tyVars : List String := gens.mapIdx (fun i _ => s!"a{i}")
-  have hlen : tyVars.length = gens.length := by
-    simp [tyVars]
-  { tyVars := tyVars, ty := hlen ▸ closed }
-
-def applySubstTy (sbst : Lean.NameMap (TyX 0)) (t : Ty 0) :
-    Check n (Ty 0) :=
-  normalizeTy (Ty.substFVarsP' sbst t)
-
 -- ---- Decl checking ----
+
+-- Render a type for a hover.  What is left of a unification variable once the
+-- declaration is solved is a type nothing determined -- either because the expression
+-- really is used at only one, unconstrained, type, or because the `let` that binds it
+-- generalized it.  Printing the internal name (`_tcFresh.137`) says nothing and shifts
+-- whenever an earlier declaration changes, so those variables are numbered `_a`, `_b`,
+-- ... within the type being shown, as `TyScheme.prettyWeak` does.
+def prettyHover (t : Ty 0) : String :=
+  let unknowns := (Ty.fvars t).toList.filter (·.isTcFresh)
+  let m : Lean.NameMap (TyX 0) := unknowns.zipIdx.foldl
+    (fun m (nm, i) => m.insert nm (.FVar (Name.mkSimple s!"_{tyVarName i}")))
+    (Lean.mkNameMap (TyX 0))
+  Ty.pretty (Ty.substFVarsP' m t)
 
 def addStxMapHovers (sbst : NameMap (TyX 0)) : Check n Unit := do
   forM ((<- get).stxMap) fun (stx, ty, loc?) => do
     let ty' <- applySubstTy sbst ty
-    Check.runMetaM (addHoverInfo stx s!"{ty'.pretty}" loc?)
+    Check.runMetaM (addHoverInfo stx (prettyHover ty') loc?)
   modify fun s => { s with stxMap := [] }
 
 
-def withSolveAll (k : Check n α) : Check n (NameMap (TyX 0) × α) := do
+-- Run `k`, solve whatever constraints it leaves buffered, and attach the hovers it
+-- recorded.  Inner `let`s have solved their own constraints already; their solutions
+-- are in `TcState.subst`, which is what the hovers are rendered with.
+def withSolveAll (k : Check n α) : Check n α := do
   let res <- k
-  let sbst <- solveAll
-  addStxMapHovers sbst
-  pure (sbst, res)
+  let _ <- solveAll
+  addStxMapHovers (← get).subst
+  pure res
 
 partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check n α
   | _, _, .mk _ .DeclNil, k => k
   | _, _, .mk _ (.DeclConcat d1 d2), k => Decl.check d1 (Decl.check d2 k)
   | _, _, .mk dstx (.DeclDef name tvars oty e), k => do
-    -- Open the type variables of the scheme with skolem FVars that keep the
-    -- user-written names, so hovers inside the body show e.g. `k`/`v`.
+    -- Open the type variables of the scheme with FVars that keep the user-written
+    -- names, so hovers inside the body show e.g. `k`/`v`.
     if tvars.hasDup then throwErrorAt dstx s!"Duplicate type variable in declaration"
     checkDefNameFresh dstx name
     let (σ, skolems) ← namedSubst tvars
     let e' := Exp.substTy σ e
     let oty' : Option (Ty 0) := oty.map (Ty.subst σ)
-    let (sbst, inferredTy) ← withSolveAll do
-      let inferredTy ← Exp.infer e'
-      match oty' with
-      | none => pure ()
-      | some t => do
-        let t ← normalizeTy t
-        addConstraint dstx inferredTy t
-      pure inferredTy
-    let finalTy ← applySubstTy sbst inferredTy
+    -- The `tyvarseq` of the Definition's rule 15: the variables this declaration
+    -- declares, plus the ones implicitly scoped at it -- those written in an annotation
+    -- inside the body that no inner `let` scopes first (section 4.6).  They are rigid
+    -- while the body is checked, and quantified by the closure afterwards.
+    let us := skolems.foldl (fun (acc : Lean.NameSet) nm => acc.insert nm)
+      (((oty'.map Ty.fvars).getD {}).union (Exp.unguardedTyVars e'))
+    let inferredTy ← withSolveAll do
+      withTyVarScope us do
+        let inferredTy ← Exp.infer e'
+        match oty' with
+        | none => pure ()
+        | some t => do
+          let t ← normalizeTy t
+          addConstraint dstx inferredTy t
+        pure inferredTy
+    let finalTy ← applyCurSubst inferredTy
+    -- Read outside `withTyVarScope`: the closure quantifies `us`, so `C` excludes it.
     let envFV ← envFVars
-    -- Apply the substitution to envFV (FVars in env that got resolved
-    -- should not be frozen; only their *remaining* FVars are).  But for
-    -- simplicity, we freeze the original envFV; this is conservative but
-    -- correct.
-    let _ := skolems  -- skolems are free in finalTy and not in env, so
-                      -- they'll be generalized naturally.
-    let scheme := Ty.generalize envFV finalTy
-    -- The value restriction.  Generalizing the type of an expression that
-    -- allocates is unsound once `Ref` is in the language: `def r := builtin_alloc([])`
-    -- at type `∀ a. Ref<List<a>>` would let one use of `r` store `Int`s into the
-    -- single underlying cell and another read them back as `String`s.  So only a
-    -- syntactic value may be generalized.
+    let isVal := Exp.isValue (← read).valueCtx e'
+    -- The value restriction.  Generalizing the type of an expression that allocates is
+    -- unsound once `Ref` is in the language: `def r := builtin_alloc([])` at type
+    -- `∀ a. Ref<List<a>>` would let one use of `r` store `Int`s into the single
+    -- underlying cell and another read them back as `String`s.  So only a syntactic
+    -- value may be generalized (`Exp.isValue`).
     --
-    -- The left-over variables of a non-value cannot simply stay free either.
-    -- Each declaration solves its own constraints (`withSolveAll`) and the
-    -- resulting substitution is never propagated back into the schemes already
-    -- stored in the environment, so a free variable in a binding's type could be
-    -- unified with `Int` in one later declaration and with `String` in another --
-    -- exactly the unsoundness we are ruling out.  Report them instead.
-    if !(Exp.isValue (← read).valueCtx e') && !scheme.tyVars.isEmpty then
-      throwErrorAt dstx s!"This declaration would create a reference with a polymorphic type,\
-       such as Ref<List<a>>; this is disallowed. Give {name} a type annotation so that it isn't polymorphic."
+    -- Unlike at a `let`, the left-over variables of a top-level non-value cannot simply
+    -- stay free: rule 87 of the Definition lets no free type variable into the basis a
+    -- top-level declaration produces, and here they could not be resolved even in
+    -- principle -- each command is elaborated on its own, so nothing later can
+    -- determine them.  Report them instead.
+    if !isVal then
+      let weak := Ty.generalize envFV finalTy
+      if !weak.tyVars.isEmpty then
+        throwErrorAt dstx s!"Value restriction: the body of {name} is not a value, so \
+          its type {weak.prettyWeak} cannot be generalized.  Give {name} a type \
+          annotation that fixes the remaining type variable(s), or make its body a \
+          value (for instance by turning it into a function)."
+    let scheme ← closeBinding dstx name us envFV isVal finalTy
     Check.runMetaM (addHoverInfo dstx s!"{scheme.pretty}")
+    pruneSubst
     withDefName dstx name scheme k
+  -- `#eval e`, `#test e1 === e2` and `#check e` each stand for a declaration of the
+  -- Definition's `val it = e` shape, so each scopes the explicit type variables written
+  -- in its expressions, exactly as a `def` does.
   | _, _, .mk _ (.DeclEval e), k => do
-    let _ ← withSolveAll (Exp.infer e)
+    let _ ← withSolveAll (withTyVarScope (Exp.unguardedTyVars e) (Exp.infer e))
+    pruneSubst
     k
   | _, _, .mk dstx (.DeclTest e1 e2), k => do
+    let us := (Exp.unguardedTyVars e1).union (Exp.unguardedTyVars e2)
     let _ ← withSolveAll do
-      let t1 ← Exp.infer e1
-      let t2 ← Exp.infer e2
-      addConstraint dstx t1 t2
+      withTyVarScope us do
+        let t1 ← Exp.infer e1
+        let t2 ← Exp.infer e2
+        addConstraint dstx t1 t2
+    pruneSubst
     k
   | _, _, .mk _ (.DeclTestError e _), k => do
-    let _ ← withSolveAll (Exp.infer e)
+    let _ ← withSolveAll (withTyVarScope (Exp.unguardedTyVars e) (Exp.infer e))
+    pruneSubst
     k
   | _, _, .mk stx (.DeclCheck e), k => do
-    let (sbst, res) ← withSolveAll (Exp.infer e)
-    let t ← applySubstTy sbst res
+    let res ← withSolveAll (withTyVarScope (Exp.unguardedTyVars e) (Exp.infer e))
+    let t ← applyCurSubst res
     let envFV ← envFVars
     let scheme := Ty.generalize envFV t
     -- `#check` binds nothing, so an un-generalizable type is not an error here;
     -- it just reports the weak variables as such (see the `DeclDef` case above).
     let rendered := if Exp.isValue (← read).valueCtx e then scheme.pretty else scheme.prettyWeak
     logInfoAt stx rendered
+    pruneSubst
     k
   | _, _, .mk dstx (.DeclTypeAlias tname alias), k => do
     checkTyNameFresh dstx tname

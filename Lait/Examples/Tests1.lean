@@ -8,11 +8,19 @@ type IntPair := Int * Int
 
 #check alloc []
 
+def churchBool (x : a) (y : a) : a := x
+
 type MyPair<a> := List<List<a>>
 
 type NatTree :=
   | NTLeaf (v : Int)
   | NTNode (l : NatTree) (r : NatTree)
+
+def test (t : NatTree) :=
+  match t with
+  | NTNode x y => 3
+  | NTLeaf _ => 2
+  end
 
 type BinTree<a> :=
   | BTLeaf (v : a)

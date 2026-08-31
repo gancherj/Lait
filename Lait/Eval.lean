@@ -17,7 +17,6 @@ inductive Val where
   | VRec : List Val -> {t m : Nat} -> Exp t (m + 1) -> Val
   | VPair : Val -> Val -> Val
   | VConstructor : String -> List Val -> Val
-  | VRecord : List (String × Val) -> Val
 
 instance : Inhabited Val := ⟨.VConst .Unit⟩
 
@@ -43,7 +42,6 @@ partial def Val.prettyRec (v : Val) (n : Nat) : _root_.String :=
       match vs with
       | [] => x
       | _ => x ++ " " ++ _root_.String.intercalate " " (vs.map fun v => v.prettyRec (n + 1))
-  | .VRecord xs => "{" ++ _root_.String.intercalate ", " (xs.map fun (x, v) => x ++ ": " ++ v.prettyRec n) ++ "}"
 
 partial def Val.pretty (v : Val) := v.prettyRec 0
 
@@ -89,13 +87,6 @@ partial def Val.eq (stx : Lean.Syntax) (v1 v2 : Val) : Except (ExpError × Lean.
        pure false
      else do
       (vs1.zip vs2).allM fun (v1, v2) => v1.eq stx v2
-  | .VRecord xs1, .VRecord xs2 =>
-      if xs1.length != xs2.length then pure false
-      else
-        let s1 := xs1.mergeSort (fun a b => a.1 <= b.1)
-        let s2 := xs2.mergeSort (fun a b => a.1 <= b.1)
-        if s1.map Prod.fst != s2.map Prod.fst then pure false
-        else (s1.zip s2).allM fun ((_, v1), (_, v2)) => v1.eq stx v2
   | _, _ => pure false
 
 
@@ -408,15 +399,6 @@ partial def Exp.eval (env : List Val) (e : Exp t m) : ExpEval Val := do
          | some k => Exp.eval env k
          | none => throwExp stx "Could not find case for match"
     | _ => throwExp stx "Match of non-constructor"
-  | .mk _ (.MkRecord es) => do
-      let vs ← es.toList.mapM (fun (s, x) => do pure (s, ← Exp.eval env x))
-      pure (.VRecord vs)
-  | .mk stx (.RecordGet e x) => do
-    match ← Val.whnf (← Exp.eval env e) with
-    | .VRecord xs => match xs.find? (fun (s, _) => s = x) with
-      | some (_, v) => pure v
-      | none => throwExp stx s!"Field {x} not found in record"
-    | _ => throwExp stx "Record get of non-record"
 
 end
 

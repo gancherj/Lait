@@ -12,21 +12,11 @@ import Lait.Elab
     end
 
 
-  -- Needs to be better printed, but shows:
-  -- ∀ a0. (List<#0> -> Int)
+  -- List<a> -> Int
   #check length
 
   -- Val.VConst (Const.Nat 2)
   #eval (length (Cons 1 (Cons 2 Nil)))
-
-}
-
-{lait_decl tst2
-
-  type Foo := { x : Int }
-
-  def foo (x : Foo) : Int := x^x
-
 
 }
 
@@ -53,7 +43,7 @@ import Lait.Elab
 
 {lait_decl tst4
 
-  -- =============== Constants of the base types we can write ===============
+  -- ===== Constants =====
   def kNum := 42
   def kStr := "hello"
   def kUnit := ()
@@ -62,12 +52,12 @@ import Lait.Elab
   #eval kUnit
 
 
-  -- =============== Operator: + ===============
+  -- ===== + =====
   #eval 3 + 4
   def add := fun x => fun y => x + y
   #eval add 5 6
 
-  -- =============== Boolean and comparison operators ===============
+  -- ===== Boolean and comparison operators =====
   #eval true && false                                    -- false
   #eval true || false                                    -- true
   #eval 3 < 4                                            -- true
@@ -85,7 +75,7 @@ import Lait.Elab
 
   #eval builtin_get(r)
 
-  -- =============== Let bindings (monomorphic, like plzoo poly) ===============
+  -- ===== Let bindings =====
   def usingLet := let x := 10 in x + 1
   #eval usingLet                                       -- 11
 
@@ -93,13 +83,13 @@ import Lait.Elab
   #eval letAnn                                         -- 6
 
 
-  -- =============== Top-level polymorphism: `id` instantiated at 2 types ===============
+  -- ===== Top-level polymorphism: `id` at two types =====
   def id := fun x => x
   #eval id 7
   #eval id "polymorphism!"
 
 
-  -- const : forall a b. a -> b -> a — used at two different instantiations
+  -- const : forall a b. a -> b -> a, at two instantiations
   def const := fun x => fun y => x
   #eval const 100 "ignored"
   #eval const "kept" 0
@@ -112,26 +102,26 @@ import Lait.Elab
   #eval compose plusOne plusTwo 10                     -- 13
 
 
-  -- =============== Pairs, fst, snd ===============
+  -- ===== Pairs, fst, snd =====
   def mkPair := fun x => fun y => (x, y)
   def p := mkPair 1 "two"
   #eval fst p                                          -- 1
   #eval snd p                                          -- "two"
 
-  -- swap : forall a b. a * b -> b * a — exercises polymorphism over a product
+  -- swap : forall a b. a * b -> b * a
   def swap := fun q => (snd q, fst q)
   #eval fst (swap (mkPair 1 2))                        -- 2
   #eval snd (swap (mkPair 7 "kept"))                   -- 7
 
 
-  -- =============== References / mutation ===============
+  -- ===== References =====
   def r2 := builtin_alloc(100)
   #eval builtin_get(r2)
   def doAssign := builtin_set(r2, 200)
   #eval builtin_get(r2)                                -- 200
   #eval builtin_get(r2) + 1                            -- 201
 
-  -- Polymorphic ref creator: forall a. a -> Ref a
+  -- forall a. a -> Ref a
   def cell := fun x => builtin_alloc(x)
   def rNum := cell 5
   def rStr := cell "stored"
@@ -139,21 +129,19 @@ import Lait.Elab
   #eval builtin_get(rStr)                              -- "stored"
 
 
-  -- =============== Explicit type annotation on def (monomorphic) ===============
+  -- ===== Annotated defs =====
   def annN : Int := 7
   #eval annN
 
   def addOne : Int -> Int := fun x => x + 1
   #eval addOne 41                                      -- 42
 
-  def tst := { x := 3, y := 4 }
-
-  -- =============== Annotation on lambda parameter ===============
+  -- Annotated lambda parameter.
   def explicitArg := fun (x : Int) => x + 1
   #eval explicitArg 9                                  -- 10
 
 
-  -- =============== Inductive types: nullary constructors ===============
+  -- ===== Nullary constructors =====
   type Color := | Red | Green | Blue
   def myColor := Green
   def colorNum :=
@@ -165,7 +153,7 @@ import Lait.Elab
   #eval colorNum                                       -- 2
 
 
-  -- =============== Inductive types: constructor with a field ===============
+  -- ===== Constructor with a field =====
   type OptN := | NoneN | SomeN (x : Int)
   def unwrap := fun o => fun d =>
     match o with
@@ -217,8 +205,7 @@ import Lait.Elab
 
 
 
-  -- =============== Recursive inductive type ===============
-  -- (`NatList` with its `Nil`/`Cons` constructors is declared once above.)
+  -- ===== Recursive inductive type (`NatList`, declared above) =====
   def headOr := fun xs => fun d =>
     match xs with
     | Nil => d
@@ -230,9 +217,7 @@ import Lait.Elab
   #check threeOnes
 
 
-  -- =============== Polymorphic function in multiple positions ===============
-  -- `id` is instantiated three times in one expression at Int, String,
-  -- and the pair type.
+  -- ===== `id` at three types in one expression =====
   def usePolyTwice := id (mkPair (id 1) (id "hi"))
   #eval fst usePolyTwice                               -- 1
   #eval snd usePolyTwice                               -- "hi"
