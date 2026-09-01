@@ -55,9 +55,9 @@ and the scope of explicit type variables have TestLetPolymorphism.lean.
 /--
 info: a -> a
 ---
-info: b -> a -> b
+info: a -> b -> a
 ---
-info: (c -> a) -> (b -> c) -> b -> a
+info: (a -> b) -> (c -> a) -> c -> b
 -/
 #guard_msgs in
 {lait_decl polySchemes
@@ -103,12 +103,24 @@ info: (c -> a) -> (b -> c) -> b -> a
 
 -- ===== Occurs check =====
 
--- CURRENT BEHAVIOR: the message names an internal unification variable
--- (`_tcFresh.NN`), whose number shifts whenever anything earlier in the file
--- changes.  REPORT.md E1.
-/-- error: Occurs check failed: _tcFresh.0 occurs in _tcFresh.0 -> _tcFresh.1 -/
+-- The unknowns are numbered `_a`, `_b`, ... within the message, so it says the same
+-- thing however many constraints were generated before it.  The two occurrences of `_a`
+-- are one variable -- that is what the occurs check is complaining about.  REPORT.md E1.
+/-- error: Occurs check failed: _a occurs in _a -> _b -/
 #guard_msgs in
 {lait_decl polyOccursCheck
+  def selfApply := fun x => x x
+}
+
+-- The numbering is per-message, not per-elaboration, so the same mistake reads the same
+-- however many constraints came before it.  This block generates plenty and still says
+-- `_a`; with the raw internal names it said `_tcFresh.<N>` for a large, drifting `N`.
+/-- error: Occurs check failed: _a occurs in _a -> _b -/
+#guard_msgs in
+{lait_decl polyOccursCheckStableName
+  #include stdlib
+  def pad1 x := (x, x)
+  def pad2 y := [y, y]
   def selfApply := fun x => x x
 }
 
@@ -184,4 +196,76 @@ error: Cannot make the type variable a equal to Int: a is chosen by whoever uses
 {lait_decl polyAnnotationIsAPromise
   -- `a` is chosen by the caller, so `x + 1` is unsound.
   def notReallyPoly (x : a) : a := x + 1
+}
+
+-- The same holds for a variable written *only* in the return type.  Every `def` with
+-- parameters is desugared by `elabDefMutual`, which pins the declared return type with a
+-- synthetic `$mutual$ret` let; that let scopes nothing of its own, so its annotation has
+-- to fall to the enclosing `def` (`ExpX.unguardedTyVars`).  Until it did, `a` here was an
+-- ordinary unification variable and this was accepted as `Int -> Int`.  REPORT.md B4.
+/--
+error: Cannot make the type variable a equal to Int: a is chosen by whoever uses this definition, so its body cannot require it to be Int
+-/
+#guard_msgs in
+{lait_decl polyReturnOnlyIsAPromise
+  def retOnly (x : Int) : a := x
+}
+
+-- ...and inside an `and` group, where the pin is the only place the return type appears.
+/--
+error: Cannot make the type variable a equal to Int: a is chosen by whoever uses this definition, so its body cannot require it to be Int
+-/
+#guard_msgs in
+{lait_decl polyReturnOnlyMutual
+  def f (x : Int) : a := g x
+  and g (y : Int) : a := y
+}
+
+-- A return-only variable the body never constrains is still genuinely polymorphic: the
+-- rigidity check must not reject one, only refuse to narrow it.
+/-- info: Int -> a -/
+#guard_msgs in
+{lait_decl polyReturnOnlyStaysPolymorphic
+  def alwaysFails (x : Int) : a := error "nope"
+  #check alwaysFails
+}
+
+-- Rigidity has to hold at the solve that *discharges* a constraint, not just while it is
+-- generated.  A `def` with parameters gets an inner solve for free -- `elabDefMutual`'s
+-- return-type pin is a `let`, and every `let` solves -- but a `def` with none has only
+-- the declaration's final solve.  While that ran outside the scope, a no-parameter `def`
+-- never had its declared variables checked at all.  REPORT.md B4.
+/--
+error: Cannot make the type variable c equal to Int: c is chosen by whoever uses this definition, so its body cannot require it to be Int
+-/
+#guard_msgs in
+{lait_decl polyNoParamSignatureIsAPromise
+  def noArgs3 : c -> Int := fun y => y + 1
+}
+
+-- The same when the variable is written on an inner `fun` rather than in a signature.
+/--
+error: Cannot make the type variable c equal to Int: c is chosen by whoever uses this definition, so its body cannot require it to be Int
+-/
+#guard_msgs in
+{lait_decl polyNoParamInnerAnnotation
+  def noArgs2 := fun (y : c) => y + 1
+}
+
+-- `#eval` is a `val it = e` declaration, so it scopes its type variables the same way.
+/--
+error: Cannot make the type variable c equal to Int: c is chosen by whoever uses this definition, so its body cannot require it to be Int
+-/
+#guard_msgs in
+{lait_decl polyEvalScopesTyVars
+  #eval (fun (y : c) => y + 1) 2
+}
+
+-- Still no over-rejection: a no-parameter `def` whose body leaves its declared variable
+-- alone stays polymorphic.
+/-- info: a -> Int -/
+#guard_msgs in
+{lait_decl polyNoParamStaysPolymorphic
+  def constly : c -> Int := fun _ => 1
+  #check constly
 }

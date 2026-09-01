@@ -33,18 +33,18 @@ import Lait.Stdlib
   def oneEmpty := Some []
   -- Option<List<a>>
   #check oneEmpty
-  -- Map<b,a>
+  -- Map<a,b>
   #check Map.empty
 
   -- Pairs, constructor applications, and `let` of values.
   def twoIds := (idf, idf)
-  -- (b -> b) * (a -> a)
+  -- (a -> a) * (b -> b)
   #check twoIds
   def boxed := ([], None)
-  -- List<b> * Option<a>
+  -- List<a> * Option<b>
   #check boxed
   def viaLet := let e := [] in (e, e)
-  -- List<b> * List<a>
+  -- List<a> * List<b>
   #check viaLet
 
   -- Each function of an `and` group is a projection out of one recursive bundle

@@ -293,14 +293,29 @@ partial def elabLaitMatchArm (a : Lean.TSyntax `lait_match_arm) : TermElabM (Sum
     pure (.inl ("Cons", [c', id'], bdy))
   | _ => throwUnsupportedSyntax
 
+-- `[e1, ..., en]` is `Cons e1 (Cons ... Nil)`.  The spine is not written anywhere, so each
+-- link is positioned over the stretch of the literal it stands for -- `[1, 2, 3]`, then
+-- `2, 3]`, then `3]` -- rather than every link over the whole literal, which would stack
+-- one hover per element on it, half of them the type of a half-applied `Cons`.  The
+-- `Cons` itself, the half-application, and the final `Nil` correspond to nothing in the
+-- source; they are collapsed to a point, which is too narrow for a hover to attach to but
+-- still positions an error (`Cons` resolves against the environment, so it does fail --
+-- "Variable Cons not found" -- in a block that never included the stdlib).
 partial def elabLaitListExp (stx : Lean.Syntax) (es : List (Lean.TSyntax `lait_exp)) : TermElabM Surface.Exp :=
   match es with
   | List.nil => mkSurfaceExp stx (.Var "Nil")
   | List.cons e es => do
-    let e ← elabLaitExp e
-    let es ← elabLaitListExp stx es
+    let hd ← elabLaitExp e
+    -- The tail runs from the next element to this node's own end, and after the last one
+    -- collapses to the closing bracket.
+    let tlStx := match es.head?.bind (·.raw.getRange?), stx.getRange? with
+      | some r, some here => Lean.Syntax.ofRange ⟨r.start, here.stop⟩
+      | none, some here => Lean.Syntax.ofRange ⟨here.stop, here.stop⟩
+      | _, _ => .missing
+    let tl ← elabLaitListExp tlStx es
     mkSurfaceExp stx $
-       (.App (<- mkSurfaceExp stx $ .App (.Var "Cons") e) es)
+       (.App (<- mkSurfaceExp stx.startMarker $
+          .App (<- mkSurfaceExp stx.startMarker (.Var "Cons")) hd) tl)
 
 
 partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
@@ -316,13 +331,18 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | error $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Error (← elabLaitExp e1))
   | `(lait_exp | ...) => do
-    match e.raw.getRange? with
-    | none =>  elabLaitExp (<- `(lait_exp| error "unimplemented"))
-    | some range =>
-      let pos := (← getFileMap).toPosition range.start
-      let s : TSyntax `str :=
-        Syntax.mkStrLit s!"unimplemented: {← getFileName}, Line {pos.line}, Column {pos.column}"
-      elabLaitExp (<- `(lait_exp| error $s:str))
+    -- Built here rather than by re-elaborating a `(lait_exp| error ...)` quotation: a
+    -- quotation's nodes are positioned at the elaborator's *ref*, which is the whole
+    -- `{lait_decl …}` command, and `mkSurfaceExp` would then hang this expression's hover
+    -- over the entire block.
+    let msg ← match e.raw.getRange? with
+      | none => pure "unimplemented"
+      | some range =>
+        let pos := (← getFileMap).toPosition range.start
+        pure s!"unimplemented: {← getFileName}, Line {pos.line}, Column {pos.column}"
+    -- The message is not written anywhere, so it is left position-less: hovering `...`
+    -- reports the type of the `error`, not `String`.
+    mkSurfaceExp e.raw (.Error (← mkSurfaceExp .missing (.Const (.String msg))))
   | `(lait_exp | internal_print $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Print (← elabLaitExp e1))
   | `(lait_exp | $n:num) =>
@@ -373,9 +393,14 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | not $e1:lait_exp) => mkLaitUnary e.raw "not" e1
   | `(lait_exp | $e1:lait_exp ++ $e2:lait_exp) => mkLaitInfix e.raw "++" e1 e2
   | `(lait_exp | $e1:lait_exp :: $e2:lait_exp) => do
+    -- Only the whole `e1 :: e2` is written; the `Cons` it applies and the half-application
+    -- in between are not, and positioning them here too would put three hovers on the same
+    -- range -- two of them types of a `Cons` that appears nowhere in the source.  They are
+    -- collapsed to a point rather than dropped, as in `elabLaitListExp`, so that an
+    -- unresolved `Cons` is still reported here.
     mkSurfaceExp e.raw $
-      .App (<- mkSurfaceExp e.raw $
-         .App (<- mkSurfaceExp e.raw (.Var "Cons")) (<- elabLaitExp e1))
+      .App (<- mkSurfaceExp e.raw.startMarker $
+         .App (<- mkSurfaceExp e.raw.startMarker (.Var "Cons")) (<- elabLaitExp e1))
          (<- elabLaitExp e2)
   | `(lait_exp | [] ) => mkSurfaceExp e.raw (.Var "Nil")
   | `(lait_exp | [$es:lait_exp,*]) => do
@@ -386,7 +411,10 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | $e1:lait_exp >= $e2:lait_exp) => mkLaitInfix e.raw ">=" e1 e2
   | `(lait_exp | $e1:lait_exp == $e2:lait_exp) => mkLaitInfix e.raw "==" e1 e2
   | `(lait_exp | $e1:lait_exp != $e2:lait_exp) => do
-     elabLaitExp (<- `(lait_exp | not ($e1:lait_exp == $e2:lait_exp)))
+     -- `not (e1 == e2)`, built directly so that both nodes are positioned at `e1 != e2`.
+     -- Going through a quotation positions them at the elaborator's ref instead -- the
+     -- whole `{lait_decl …}` command -- which puts a `Bool` hover over the entire block.
+     mkSurfaceExp e.raw (.Op "not" [← mkLaitInfix e.raw "==" e1 e2])
   | `(lait_exp | $e1:lait_exp && $e2:lait_exp) => mkLaitInfix e.raw "&&" e1 e2
   | `(lait_exp | $e1:lait_exp || $e2:lait_exp) => mkLaitInfix e.raw "||" e1 e2
   | `(lait_exp | fst $e2:lait_exp) => do

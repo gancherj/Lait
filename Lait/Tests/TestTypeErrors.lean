@@ -80,7 +80,7 @@ and E3.
 -- ===== Wrong number of arguments =====
 
 -- Too many: the result of the last application is not a function.
-/-- error: Cannot unify Int with Int -> _tcFresh.3 -/
+/-- error: Cannot unify Int with Int -> _a -/
 #guard_msgs in
 {lait_decl teTooManyArgs
   def add (x : Int) (y : Int) : Int := x + y
@@ -96,7 +96,7 @@ and E3.
 }
 
 -- Applying something that is not a function.
-/-- error: Cannot unify Int with Int -> _tcFresh.0 -/
+/-- error: Cannot unify Int with Int -> _a -/
 #guard_msgs in
 {lait_decl teApplyNonFunction
   #eval 1 2
@@ -106,7 +106,7 @@ and E3.
 
 -- `List.map` takes the list first; backwards gives a `List` vs function type
 -- mismatch.
-/-- error: Cannot unify List<_tcFresh.140> with _tcFresh.142 -> Int -/
+/-- error: Cannot unify List<_a> with _b -> Int -/
 #guard_msgs in
 {lait_decl teMapArgOrder
   #include stdlib
@@ -271,7 +271,7 @@ and E3.
 }
 
 -- Reading through a non-reference.
-/-- error: Cannot unify Int with Ref<_tcFresh.0> -/
+/-- error: Cannot unify Int with Ref<_a> -/
 #guard_msgs in
 {lait_decl teDerefNonRef
   #eval builtin_get(1)

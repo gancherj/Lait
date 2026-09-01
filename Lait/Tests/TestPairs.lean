@@ -72,13 +72,14 @@ Pairs, not n-tuples: a "triple" is a pair whose second component is a pair, and
   #test uncurry addC (1, 2) === 3
 }
 
--- CURRENT BEHAVIOR: the printed type variables are fresh names, not the ones
--- written in the source.  `mkPair` is declared `(x : a) (y : b) : a * b` and prints
--- as `b -> a -> b * a`.  `swap` happens to line up; that is luck.  REPORT.md.
+-- A scheme is printed with the names its declaration wrote: `swap`, declared
+-- `(q : a * b) : b * a`, reports exactly that.  `mkPair` is reported through a fresh
+-- instantiation, which keeps no names -- but the generated ones are handed out in order
+-- of first appearance, so they line up with the declaration anyway.  REPORT.md.
 /--
-info: b -> a -> b * a
+info: a -> b -> a * b
 ---
-info: b * a -> a * b
+info: a * b -> b * a
 ---
 info: Int * String
 -/

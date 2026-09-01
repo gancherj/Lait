@@ -159,8 +159,11 @@ closure.
 
 -- Second form: `a` also occurs unguarded in the outer declaration, so it is scoped
 -- there instead -- one variable for the whole `def`, leaving `id` monomorphic.  The
--- Definition rejects this program too.
-/-- error: Cannot unify String with Int -/
+-- Definition rejects this program too: `a` is the caller's to choose, so the body may
+-- not pin it to `Int` and then to `String`.
+/--
+error: Cannot make the type variable a equal to String: a is chosen by whoever uses this definition, so its body cannot require it to be String
+-/
 #guard_msgs in
 {lait_decl lpTyVarScopedAtDef
   def x := (let id : a -> a := fun z => z in (id 1, id "s"), fun (z : a) => z)

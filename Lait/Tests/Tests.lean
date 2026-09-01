@@ -194,7 +194,7 @@ import Lait.Elab
 
   #eval sum (Cons 1 (Cons 2 Nil))
 
-  def test : foo := SomeN 1
+  def test : OptN := SomeN 1
 
   type Opt<a> := | None | Some (x : a)
 

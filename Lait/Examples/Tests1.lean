@@ -8,6 +8,9 @@ type IntPair := Int * Int
 
 #check alloc []
 
+def mkPair (x : a) (y : b) : a * b := (x, y)
+#check mkPair          -- a -> b -> a * b
+
 def churchBool (x : a) (y : a) : a := x
 
 type MyPair<a> := List<List<a>>
@@ -33,8 +36,6 @@ type Tree :=
 def fib? := fix f. fun n => if n < 2 then 1 else f (n - 1) + f (n - 2)
 #eval fib? 17
 
-
-def test := Node (Node (Leaf 1) (Leaf 2)) (Leaf 3)
 
 def testList := Cons 1 (Cons 2 [])
 
