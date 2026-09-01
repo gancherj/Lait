@@ -115,6 +115,28 @@ info: Int * Int
   def q : Weird := (1, 2)
 }
 
+-- ===== An alias in a constructor's argument type =====
+
+-- A `type ... := | ...` may spell a constructor argument with an alias.  Aliases there are
+-- expanded when the constructor is *used*, not when it is declared -- which is what lets a
+-- mutually recursive group name a sibling that has not been declared yet.
+{lait_decl aliasInCtor
+  #include stdlib
+  type Ints<a> := List<a>
+  type Labelled<a> := Ints<a> * a
+  type Wrap<a> := | Wrap (v : Ints<a>) | Both (p : Labelled<a>)
+  def unwrap (w : Wrap<a>) : List<a> :=
+    match w with
+    | Wrap v => v
+    | Both p => fst p
+    end
+  -- Wrap<a> -> List<a>
+  #check unwrap
+  #test unwrap (Wrap [1, 2]) === [1, 2]
+  #test unwrap (Both ([1], 7)) === [1]
+  #test unwrap (Wrap ["a"]) === ["a"]
+}
+
 -- ===== Errors =====
 
 /-- error: Wrong number of arguments to Pair -/
@@ -122,6 +144,16 @@ info: Int * Int
 {lait_decl aliasWrongArity
   type Pair<a, b> := a * b
   def q : Pair<Int> := (1, 2)
+}
+
+-- Arity is checked in a constructor's argument type too.
+/-- error: Wrong number of arguments to Ints -/
+#guard_msgs in
+{lait_decl aliasArityInCtor
+  #include stdlib
+  type Ints<a> := List<a>
+  type Bad := | Bad (v : Ints<Int, Int>)
+  def f (b : Bad) : Int := 0
 }
 
 -- No recursive aliases; use `type ... := | ...` for a recursive type.

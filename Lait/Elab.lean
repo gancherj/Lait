@@ -715,14 +715,11 @@ structure LaitCtx where
   n : Nat
   vars : List _root_.String
   hvars : vars.length = n
-  varMap : Vec n TyScheme
-  varLocs : Vec n (Option DeclarationLocation)
+  /-- The accumulated top-level bindings; see `TcEnv.vars`. -/
+  vars' : Vec n VarInfo
   opMap : Std.TreeMap _root_.String OpSig
   tyMap : Std.TreeMap _root_.String TyVal
   frozen : Lean.NameSet
-  /-- Which accumulated top-level names are constructor functions, by de Bruijn
-  level; see `TcEnv.ctorLevels`. -/
-  ctorLevels : Std.TreeSet Nat
   freshCounter : Nat
   evalEnv : List Val
   evalState : EvalState
@@ -736,8 +733,8 @@ structure LaitCtx where
 
 instance : Inhabited LaitCtx where
   default :=
-    { n := 0, vars := List.nil, hvars := rfl, varMap := Vec.nil, varLocs := Vec.nil
-      opMap := initTcOpMap, tyMap := initTyMap, frozen := {}, ctorLevels := {}
+    { n := 0, vars := List.nil, hvars := rfl, vars' := Vec.nil
+      opMap := initTcOpMap, tyMap := initTyMap, frozen := {}
       freshCounter := 0, evalEnv := List.nil, evalState := EvalState.new
       included := {}, defLocs := {} }
 
@@ -752,8 +749,8 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     let decl' : Decl ctx.n vars'.length := ctx.hvars ▸ decl
     let startEnv : TcEnv ctx.n :=
       { opMap := ctx.opMap, tyMap := ctx.tyMap, curSyntax := (← getRef)
-        frozen := ctx.frozen, varMap := ctx.varMap, varLocs := ctx.varLocs
-        ctorLevels := ctx.ctorLevels, defLocs := ctx.defLocs, tyVarScope := {}
+        frozen := ctx.frozen, vars := ctx.vars'
+        defLocs := ctx.defLocs, tyVarScope := {}
         -- `vars` is exactly the list of top-level `def` names accumulated so
         -- far, so the type checker's uniqueness check needs no extra state
         -- beyond the language's built-in names.
@@ -761,16 +758,15 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     -- The continuation runs at the final depth, so it sees the fully-extended
     -- typing environment (all defs/types of this batch in scope).
     let capture : Check vars'.length
-        (Vec vars'.length TyScheme × Vec vars'.length (Option DeclarationLocation) ×
-          Std.TreeMap _root_.String OpSig × Std.TreeMap _root_.String TyVal × Lean.NameSet ×
-          Std.TreeSet Nat) := do
+        (Vec vars'.length VarInfo × Std.TreeMap _root_.String OpSig ×
+          Std.TreeMap _root_.String TyVal × Lean.NameSet) := do
       let e ← read
-      pure (e.varMap, e.varLocs, e.opMap, e.tyMap, e.frozen, e.ctorLevels)
-    let ((vm, vl, om, tm, fr, cl), st) ← liftTermElabM <|
+      pure (e.vars, e.opMap, e.tyMap, e.frozen)
+    let ((vi, om, tm, fr), st) ← liftTermElabM <|
       ((Decl.check decl' capture).run startEnv).run { freshCounter := ctx.freshCounter }
     let (evalEnv', evalState') ← liftTermElabM <| Decl.runFrom decl ctx.evalEnv ctx.evalState
-    pure { n := vars'.length, vars := vars', hvars := rfl, varMap := vm, varLocs := vl
-           opMap := om, tyMap := tm, frozen := fr, ctorLevels := cl
+    pure { n := vars'.length, vars := vars', hvars := rfl, vars' := vi
+           opMap := om, tyMap := tm, frozen := fr
            freshCounter := st.freshCounter
            evalEnv := evalEnv', evalState := evalState', included := ctx.included
            defLocs := ctx.defLocs }
@@ -935,11 +931,12 @@ def laitCompletionItems (ctx : LaitCtx) (uri : DocumentUri) (pos : Lsp.Position)
   let data : ResolvableCompletionItemData := { uri, pos }
   let mut items : Array ResolvableCompletionItem := #[]
   let mut seen : List _root_.String := List.nil
-  for (name, sch) in ctx.vars.zip ctx.varMap.val do
+  for (name, info) in ctx.vars.zip ctx.vars'.val do
     unless name == "_" || seen.contains name do
       seen := name :: seen
       items := items.push
-        { label := name, detail? := some sch.pretty, kind? := some .«variable», data? := some data }
+        { label := name, detail? := some info.scheme.pretty, kind? := some .«variable»,
+          data? := some data }
   for tname in ctx.tyMap.keys do
     unless seen.contains tname do
       seen := tname :: seen

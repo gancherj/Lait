@@ -64,14 +64,14 @@ closure.
 
 -- What the context fixes is not generalized: `g` is `x`, whose type the parameter
 -- already pinned down.
-/-- error: Cannot unify String with Int -/
+/-- error: Cannot unify Int with String -/
 #guard_msgs in
 {lait_decl lpContextFixed
   def f x := let g := x in (g 1, g "s")
 }
 
 -- Same when the connection runs through a constraint rather than the type itself.
-/-- error: Cannot unify String with Int -/
+/-- error: Cannot unify Int with String -/
 #guard_msgs in
 {lait_decl lpContextFixedIndirect
   def f x := let g := fun y => x y in (g 1, g "s")
@@ -162,7 +162,7 @@ closure.
 -- Definition rejects this program too: `a` is the caller's to choose, so the body may
 -- not pin it to `Int` and then to `String`.
 /--
-error: Cannot make the type variable a equal to String: a is chosen by whoever uses this definition, so its body cannot require it to be String
+error: Cannot make the type variable a equal to Int: a is chosen by whoever uses this definition, so its body cannot require it to be Int
 -/
 #guard_msgs in
 {lait_decl lpTyVarScopedAtDef
@@ -192,7 +192,7 @@ error: The type variable(s) a written in the type of g cannot be generalized her
 -- Two variables of one declaration are chosen separately, so the body may not force
 -- them together.
 /--
-error: Cannot make the type variables a and b equal: each is chosen separately by whoever uses this definition
+error: Cannot make the type variables b and a equal: each is chosen separately by whoever uses this definition
 -/
 #guard_msgs in
 {lait_decl lpTwoRigidTyVars

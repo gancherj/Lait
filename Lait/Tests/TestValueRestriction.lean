@@ -108,7 +108,7 @@ import Lait.Stdlib
 -- ===== Non-values with leftover type variables are rejected =====
 
 /--
-error: Value restriction: the body of r is not a value, so its type Ref<List<_a>> cannot be generalized.  Give r a type annotation that fixes the remaining type variable(s), or make its body a value (for instance by turning it into a function).
+error: Value restriction: the body of r is not a value, so its type Ref<List<a>> cannot be generalized.  Give r a type annotation that fixes the remaining type variable(s), or make its body a value (for instance by turning it into a function).
 -/
 #guard_msgs in
 {lait_decl vrAlloc
@@ -124,7 +124,7 @@ error: Value restriction: the body of r is not a value, so its type Ref<List<_a>
 
 -- Same for an ordinary application: only constructors are exempt.
 /--
-error: Value restriction: the body of xs is not a value, so its type List<_a> cannot be generalized.  Give xs a type annotation that fixes the remaining type variable(s), or make its body a value (for instance by turning it into a function).
+error: Value restriction: the body of xs is not a value, so its type List<a> cannot be generalized.  Give xs a type annotation that fixes the remaining type variable(s), or make its body a value (for instance by turning it into a function).
 -/
 #guard_msgs in
 {lait_decl vrApp
@@ -136,7 +136,7 @@ error: Value restriction: the body of xs is not a value, so its type List<_a> ca
 -- A binder shadowing a constructor is an ordinary variable, so applying it is
 -- expansive like any other call.
 /--
-error: Value restriction: the body of shadowed is not a value, so its type Ref<List<_a>> cannot be generalized.  Give shadowed a type annotation that fixes the remaining type variable(s), or make its body a value (for instance by turning it into a function).
+error: Value restriction: the body of shadowed is not a value, so its type Ref<List<a>> cannot be generalized.  Give shadowed a type annotation that fixes the remaining type variable(s), or make its body a value (for instance by turning it into a function).
 -/
 #guard_msgs in
 {lait_decl vrShadowedCtor
@@ -147,7 +147,7 @@ error: Value restriction: the body of shadowed is not a value, so its type Ref<L
 -- Writing the type variable out does not buy generalization back: the body still
 -- allocates, so `a` would still be shared by every use.
 /--
-error: Value restriction: the body of r is not a value, so its type Ref<List<_a>> cannot be generalized.  Give r a type annotation that fixes the remaining type variable(s), or make its body a value (for instance by turning it into a function).
+error: Value restriction: the body of r is not a value, so its type Ref<List<a>> cannot be generalized.  Give r a type annotation that fixes the remaining type variable(s), or make its body a value (for instance by turning it into a function).
 -/
 #guard_msgs in
 {lait_decl vrAnnotatedPoly
@@ -182,10 +182,10 @@ error: Value restriction: the body of r is not a value, so its type Ref<List<_a>
 
 -- ===== `#check` reports what it cannot generalize =====
 
--- `#check` binds nothing, so an un-generalizable type is not an error there.
--- Weak variables print as `_a`, `_b`, ... rather than as `a`, `b`, ...
+-- `#check` binds nothing, so an un-generalizable type is not an error there.  Its type
+-- variables are named `a`, `b`, ... like everywhere else.
 /--
-info: Ref<List<_a>>
+info: Ref<List<a>>
 ---
 info: List<a>
 -/

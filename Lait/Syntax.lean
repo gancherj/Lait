@@ -210,30 +210,6 @@ partial def Ty.close (s : Lean.Name) (t : Ty n) : Ty (n + 1) :=
   | .mk stx (.TApp o ts) => .mk stx (.TApp o (ts.attach.map fun ⟨x, _⟩ => x.close s))
   | .mk stx (.FVar n) => if n = s then .mk stx (.Var 0) else .mk stx (.FVar n)
 
-mutual
-  partial def Ty.substFVars [Monad M] [MonadExcept String M] (m : Lean.NameMap (TyX 0)) (t : Ty 0) : M (Ty 0) :=
-    match t with
-    | .mk stx inner => do pure (.mk stx (<- TyX.substFVars m inner))
-
-  partial def TyX.substFVars [Monad M] [MonadExcept String M] (m : Lean.NameMap (TyX 0)) (t : TyX 0) : M (TyX 0) :=
-      match t with
-      | .Int => pure .Int
-      | .Unit => pure .Unit
-      | .Bool => pure .Bool
-      | .Str => pure .Str
-      | .FVar j =>
-        match m.get? j with
-        | some t => pure t
-        | _ => throw $ s!"Unknown type variable: {j}"
-      | .Var i => pure $ .Var i
-      | .Arrow t1 t2 => do pure $ .Arrow (← Ty.substFVars m t1) (← Ty.substFVars m t2)
-      | .Prod t1 t2 => do pure $ .Prod (← Ty.substFVars m t1) (← Ty.substFVars m t2)
-      | .Ref t => do pure $ .Ref (← Ty.substFVars m t)
-      | .TApp s ts => do pure $ .TApp s (← ts.attach.mapM fun ⟨x, _⟩ => Ty.substFVars m x)
-end
-
-
-
 -- Substitute the *type* variables of an expression (`Fin n → Ty n'`), leaving
 -- the term structure and its de Bruijn indices untouched.  Term binders never
 -- bind type variables, so `σ` is threaded unchanged under them — there is no

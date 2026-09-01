@@ -69,6 +69,15 @@ info: (a -> b) -> (c -> a) -> c -> b
   #check compose
 }
 
+-- The letters run `a`, `b`, `c`, ... in the order the reader meets them, however many a
+-- declaration needs.
+/-- info: a -> b -> c -> d -> e -> f -> g -> h -> a * b * c * d * e * f * g * h -/
+#guard_msgs in
+{lait_decl polyManyVariables
+  def oct p q r s t u v w := (p, (q, (r, (s, (t, (u, (v, w)))))))
+  #check oct
+}
+
 -- ===== `let` generalizes too =====
 
 -- The textbook let-polymorphism example.  `id` is generalized where it is bound, so
@@ -95,7 +104,7 @@ info: (a -> b) -> (c -> a) -> c -> b
 -- ===== `fun` parameters do NOT generalize =====
 
 -- No rank-2 polymorphism: a parameter cannot be used at two types.
-/-- error: Cannot unify String with Int -/
+/-- error: Cannot unify Int with String -/
 #guard_msgs in
 {lait_decl polyLambdaIsMonomorphic
   def useTwice := fun f => (f 1, f "s")
@@ -103,19 +112,19 @@ info: (a -> b) -> (c -> a) -> c -> b
 
 -- ===== Occurs check =====
 
--- The unknowns are numbered `_a`, `_b`, ... within the message, so it says the same
--- thing however many constraints were generated before it.  The two occurrences of `_a`
--- are one variable -- that is what the occurs check is complaining about.  REPORT.md E1.
-/-- error: Occurs check failed: _a occurs in _a -> _b -/
+-- The unknowns are named `a`, `b`, ... within the message, so it says the same thing
+-- however many constraints were generated before it.  The two occurrences of `a` are one
+-- variable -- that is what the occurs check is complaining about.
+/-- error: Occurs check failed: a occurs in a -> b -/
 #guard_msgs in
 {lait_decl polyOccursCheck
   def selfApply := fun x => x x
 }
 
--- The numbering is per-message, not per-elaboration, so the same mistake reads the same
+-- The naming is per-message, not per-elaboration, so the same mistake reads the same
 -- however many constraints came before it.  This block generates plenty and still says
--- `_a`; with the raw internal names it said `_tcFresh.<N>` for a large, drifting `N`.
-/-- error: Occurs check failed: _a occurs in _a -> _b -/
+-- `a`; with the raw internal names it said `_tcFresh.<N>` for a large, drifting `N`.
+/-- error: Occurs check failed: a occurs in a -> b -/
 #guard_msgs in
 {lait_decl polyOccursCheckStableName
   #include stdlib

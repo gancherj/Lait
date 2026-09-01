@@ -7,9 +7,8 @@ import Lait.Stdlib
 Each block pairs a mistake with the message Lait currently produces.  Two things
 to notice: every mismatch is reported as `Cannot unify X with Y`, with no
 expected/got framing, no offending sub-expression, and the position of the whole
-enclosing expression; and which type lands on the left of `with` follows the
-order constraints happen to be solved in, not what the user wrote.  REPORT.md E2
-and E3.
+enclosing expression; and the type on the left of `with` is whichever the checker
+reached first, which is not always the one the user would name first.
 -/
 
 -- ===== Mixing numbers and strings =====
@@ -80,7 +79,7 @@ and E3.
 -- ===== Wrong number of arguments =====
 
 -- Too many: the result of the last application is not a function.
-/-- error: Cannot unify Int with Int -> _a -/
+/-- error: Cannot unify Int with Int -> a -/
 #guard_msgs in
 {lait_decl teTooManyArgs
   def add (x : Int) (y : Int) : Int := x + y
@@ -96,7 +95,7 @@ and E3.
 }
 
 -- Applying something that is not a function.
-/-- error: Cannot unify Int with Int -> _a -/
+/-- error: Cannot unify Int with Int -> a -/
 #guard_msgs in
 {lait_decl teApplyNonFunction
   #eval 1 2
@@ -106,7 +105,7 @@ and E3.
 
 -- `List.map` takes the list first; backwards gives a `List` vs function type
 -- mismatch.
-/-- error: Cannot unify List<_a> with _b -> Int -/
+/-- error: Cannot unify List<a> with Int -> Int -/
 #guard_msgs in
 {lait_decl teMapArgOrder
   #include stdlib
@@ -136,7 +135,7 @@ and E3.
 
 -- ===== Comparing different types =====
 
-/-- error: Cannot unify Int with String -/
+/-- error: Cannot unify String with Int -/
 #guard_msgs in
 {lait_decl teCompareMixed
   #eval 1 == "1"
@@ -271,7 +270,7 @@ and E3.
 }
 
 -- Reading through a non-reference.
-/-- error: Cannot unify Int with Ref<_a> -/
+/-- error: Cannot unify Int with Ref<a> -/
 #guard_msgs in
 {lait_decl teDerefNonRef
   #eval builtin_get(1)
