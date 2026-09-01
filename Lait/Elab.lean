@@ -280,7 +280,7 @@ partial def elabLaitMatchArm (a : Lean.TSyntax `lait_match_arm) : TermElabM (Sum
   | `(lait_match_arm | | $c:ident $ids:lait_ident* => $bdy:lait_exp) => do
     let bdy <- elabLaitExp bdy
     let ids' ← ids.mapM elabLaitIdent
-    if ids'.toList.hasDup then
+    if (ids'.toList.filter (· != "_")).hasDup then
       throwErrorAt a "Duplicate variables in pattern match"
     pure (.inl (c.getId.toString, ids'.toList, bdy))
   | `(lait_match_arm | | [] => $bdy:lait_exp) => do
