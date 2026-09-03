@@ -17,6 +17,13 @@ inductive Val where
   | VRec : List Val -> {t m : Nat} -> Exp t (m + 1) -> Val
   | VPair : Val -> Val -> Val
   | VConstructor : String -> List Val -> Val
+  /-- A definition whose body raised while it was being evaluated, carrying the
+  definition's name and the error.  The binding still has to occupy its slot in
+  the environment: de Bruijn indices are assigned against the full list of
+  definitions, so dropping a failed one silently rebinds every *earlier*
+  definition to the wrong value.  Using it raises instead -- see the `Var` case
+  of `Exp.eval`, the only place a `VFailed` can be observed. -/
+  | VFailed : String -> String -> Val
 
 instance : Inhabited Val := ⟨.VConst .Unit⟩
 
@@ -37,6 +44,7 @@ partial def Val.prettyRec (v : Val) (n : Nat) : _root_.String :=
   | .VClosure .. => "<function>"
   | .VRec .. => "<function>"
   | .VPair v1 v2 => "(" ++ v1.prettyRec n ++ ", " ++ v2.prettyRec n ++ ")"
+  | .VFailed x _ => s!"<{x}: definition failed>"
   | .VConstructor x vs =>
     wrapParensIf (n > 0 && vs.length > 0) $
       match vs with
@@ -259,17 +267,21 @@ def printLogs  (stx : Lean.Syntax) (logs : List String) : DeclEval Unit := do
   logs.reverse.forM fun log => do
     Lean.logInfoAt stx log
 
+/-- Run a definition's body.  Failure is *returned*, not raised: a definition
+whose body errors must not take the rest of the declaration group down with it,
+any more than a failing `#test` does (`scopeExpError`).  The caller records the
+failure in the environment instead, so later declarations still run. -/
 def DeclEval.liftExpEval (stx : Lean.Syntax) (e : ExpEval α) : DeclEval (Except (String × Lean.Syntax) α) := do
   modify EvalState.resetSteps
   let st ← get
   let res : Option (Except (ExpError × Lean.Syntax) (α × EvalState)) ← withTimeout st.timeout (e.run st).run
   match res with
-  | none => pure (.error ("Timeout", .missing))
+  | none => pure (.error ("Timeout", stx))
   | some (.ok (a, st')) => do
      printLogs stx st'.logs
      set { st' with logs := [] }
      pure (.ok a)
-  | some (.error err) => throwDecl err.2 err.1.message
+  | some (.error err) => pure (.error (err.1.message, err.2))
 
 def DeclEval.scopeExpError (stx : Lean.Syntax) (e : ExpEval α) : DeclEval (Except String α) := do
   modify EvalState.resetSteps
@@ -326,7 +338,11 @@ partial def Exp.eval (env : List Val) (e : Exp t m) : ExpEval Val := do
   | .mk _ (.Const c) => pure (.VConst c)
   | .mk _ (.Lam _ _ body) => pure (.VClosure env body)
   | .mk _ (.Rec _ body) => pure (.VRec env body)
-  | .mk _ (.Var i) => pure env[i.val]!
+  | .mk stx (.Var i) =>
+    match env[i.val]! with
+    | .VFailed name msg =>
+      throwExp stx s!"`{name}` cannot be used here because its own definition failed: {msg}"
+    | v => pure v
   | .mk _ (.Loc i) => pure (.VLoc i)
   | .mk _ (.App e1 e2) => do
     let v1 ← Exp.eval env e1
@@ -416,13 +432,16 @@ def Decl.eval (d : Decl n m) (env : List Val) : DeclEval (List Val) :=
   | .mk _ (.DeclConcat d1 d2)  => do
     let env' ← d1.eval env
     d2.eval env'
-  | .mk dstx (.DeclDef _ _ _ e) => do
+  | .mk dstx (.DeclDef name _ _ e) => do
     let v ← DeclEval.liftExpEval dstx (Exp.eval env e)
     match v with
     | .ok v => pure (v :: env)
-    | .error e => do
-      Lean.logErrorAt e.2 e.1
-      pure env
+    | .error err => do
+      Lean.logErrorAt err.2 err.1
+      -- Bind the failure rather than dropping the binding: the environment has
+      -- to stay the same length as the list of names the type checker indexed
+      -- against, or every earlier definition shifts by one.
+      pure (.VFailed name err.1 :: env)
   | .mk _ (.DeclTypeAlias _ _) => pure env
   | .mk _ (.DeclCheck _) => pure env
   | .mk stx (.DeclEval e) => do

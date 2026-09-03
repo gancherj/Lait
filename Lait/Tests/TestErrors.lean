@@ -190,3 +190,55 @@ the substring.
   def alsoBad := true + 1
   #test 1 === 2
 }
+
+-- ===== A definition whose body raises =====
+
+/-
+A `def` is evaluated as soon as it is declared, so its body can raise before
+anything uses it.  That failure is *local*: it is reported once at the
+declaration, the declaration group carries on, and the binding stays in the
+environment as a recorded failure (`Val.VFailed`).
+
+Both halves matter.  Aborting the group instead would mean one bad definition
+hid every later result; and dropping the binding would leave the environment
+shorter than the list of names the type checker indexed against, silently
+rebinding every *earlier* definition to the wrong value -- `before` below would
+have evaluated to `after`'s value, with no error anywhere.
+-/
+/-- error: ERROR: boom -/
+#guard_msgs in
+{lait_decl defBodyRaises
+  #include stdlib
+
+  def before : Int := 111
+  def raises : Int := error "boom"
+  def after : Int := 222
+
+  -- Neighbours are untouched, and keep their own values.
+  #test before === 111
+  #test after === 222
+
+  -- Using the failed definition raises at the point of use, naming it.
+  #test_error raises + 1 ~ "`raises` cannot be used here"
+  #test_error raises + 1 ~ "boom"
+}
+
+-- The failure propagates: a definition built from a failed one fails in turn,
+-- and says which definition was the root cause.
+/--
+error: ERROR: root cause
+---
+error: `broken` cannot be used here because its own definition failed: ERROR: root cause
+-/
+#guard_msgs in
+{lait_decl defBodyRaisesChain
+  #include stdlib
+
+  def broken : Int := error "root cause"
+  def derived : Int := broken + 1
+  def fine : Int := 7
+
+  #test fine === 7
+  #test_error derived ~ "`derived` cannot be used here"
+  #test_error broken ~ "root cause"
+}
