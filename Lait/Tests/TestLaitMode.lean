@@ -18,7 +18,7 @@ checks only the happy path.
 -- The stdlib is in scope without an explicit `#include`.
 #test List.length [1, 2, 3] === 3
 #test Some 1 === Some 1
-#test Map.lookup (Map.insert "a" 1 Map.empty) "a" === Some 1
+#test Map.lookup (Map.insert Map.empty "a" 1) "a" === Some 1
 
 -- Ordinary declarations, in the file's own module.
 def double (n : Int) : Int := n * 2

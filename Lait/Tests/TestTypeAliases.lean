@@ -87,7 +87,7 @@ info: List<Int>
 
   type Table<v> := Map<String, v>
   def t : Table<Int> := Map.empty
-  #test Map.lookup (Map.insert "a" 1 t) "a" === Some 1
+  #test Map.lookup (Map.insert t "a" 1) "a" === Some 1
 
   type Pred<a> := a -> Bool
   def isPos : Pred<Int> := fun n => n > 0

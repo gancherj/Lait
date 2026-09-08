@@ -146,7 +146,7 @@ A `type` with exactly one constructor also gets an accessor per named field: for
 -- The stdlib's `Map` has one constructor, so it has an accessor too.
 {lait_decl getStdlibMap
   #include stdlib
-  #test List.length (Map.entries (Map.insert "a" 1 Map.empty)) === 1
+  #test List.length (Map.entries (Map.insert Map.empty "a" 1)) === 1
 }
 
 -- ===== Two fields of the same name =====

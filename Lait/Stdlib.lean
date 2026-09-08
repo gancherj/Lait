@@ -62,7 +62,7 @@ import Lait.Elab
     | Map entries => Map (Map.delete_inner entries key)
     end
 
-  def Map.insert (key : k) (value : v) (m : Map<k, v>) : Map<k, v> :=
+  def Map.insert (m : Map<k, v>) (key : k) (value : v) : Map<k, v> :=
     match m with
     | Map entries => Map ((key, value) :: (Map.delete_inner entries key))
     end

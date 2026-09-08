@@ -147,7 +147,7 @@ info: Int * (Int -> Int) -> Int
   #test fst (get r) === 3
 
   -- The stdlib `Map` is exactly this: a list of key/value pairs.
-  #test Map.lookup (Map.insert 1 "one" Map.empty) 1 === Some "one"
+  #test Map.lookup (Map.insert Map.empty 1 "one") 1 === Some "one"
 }
 
 -- ===== No pattern matching on pairs =====

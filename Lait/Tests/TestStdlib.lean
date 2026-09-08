@@ -69,8 +69,8 @@ info: Option<a> -> (a -> Option<b>) -> Option<b>
 
   -- An association list; `Map.empty` is polymorphic in key and value type.
   def m0 : Map<String, Int> := Map.empty
-  def m1 := Map.insert "a" 1 m0
-  def m2 := Map.insert "b" 2 m1
+  def m1 := Map.insert m0 "a" 1
+  def m2 := Map.insert m1 "b" 2
 
   #test Map.lookup m2 "a" === Some 1
   #test Map.lookup m2 "b" === Some 2
@@ -78,7 +78,7 @@ info: Option<a> -> (a -> Option<b>) -> Option<b>
   #test Map.lookup m0 "a" === None
 
   -- Re-inserting replaces rather than shadows.
-  def m3 := Map.insert "a" 99 m2
+  def m3 := Map.insert m2 "a" 99
   #test Map.lookup m3 "a" === Some 99
   #test Map.lookup m3 "b" === Some 2
 
@@ -88,20 +88,20 @@ info: Option<a> -> (a -> Option<b>) -> Option<b>
   -- Deleting an absent key is a no-op.
   #test Map.lookup (Map.delete m4 "zz") "b" === Some 2
 
-  -- NOTE the inconsistent argument orders (REPORT.md P7):
-  --   Map.insert key value m   -- map last
-  --   Map.lookup m key         -- map first
-  --   Map.delete m key         -- map first
+  -- Every container operation takes the container first (REPORT.md P7):
+  --   Map.insert m key value
+  --   Map.lookup m key
+  --   Map.delete m key
 
   -- Any equality-comparable key type works.
   def n0 : Map<Int, String> := Map.empty
-  #test Map.lookup (Map.insert 1 "one" n0) 1 === Some "one"
-  #test Map.lookup (Map.insert 1 "one" n0) 2 === None
+  #test Map.lookup (Map.insert n0 1 "one") 1 === Some "one"
+  #test Map.lookup (Map.insert n0 1 "one") 2 === None
 
   -- Including compound keys.
   def p0 : Map<Int * Int, Int> := Map.empty
-  #test Map.lookup (Map.insert (1, 2) 3 p0) (1, 2) === Some 3
-  #test Map.lookup (Map.insert (1, 2) 3 p0) (2, 1) === None
+  #test Map.lookup (Map.insert p0 (1, 2) 3) (1, 2) === Some 3
+  #test Map.lookup (Map.insert p0 (1, 2) 3) (2, 1) === None
 }
 
 -- ===== References =====

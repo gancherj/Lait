@@ -76,8 +76,8 @@ import Lait.Stdlib
   #test List.length (true :: fst viaLet) === 1
   #test (fst twoIds) 1 === 1
   #test (snd twoIds) "one" === "one"
-  #test Map.lookup (Map.insert 1 "one" Map.empty) 1 === Some "one"
-  #test Map.lookup (Map.insert "one" 1 Map.empty) "one" === Some 1
+  #test Map.lookup (Map.insert Map.empty 1 "one") 1 === Some "one"
+  #test Map.lookup (Map.insert Map.empty "one" 1) "one" === Some 1
   #test firstOf [1] === Some 1
   #test firstOf ["one"] === Some "one"
   #test myId 1 === 1

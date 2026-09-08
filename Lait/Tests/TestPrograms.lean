@@ -54,7 +54,7 @@ and folds.
       | Some v => v
       | None => error ("unbound variable: " ++ x)
       end
-    | Let x v b => eval (Map.insert x (eval env v) env) b
+    | Let x v b => eval (Map.insert env x (eval env v)) b
     end
 
   def empty : Env := Map.empty
