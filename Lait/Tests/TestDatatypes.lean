@@ -371,6 +371,43 @@ info: Int -> Int -> Shape
   def f (x : Missing) : Int := 0
 }
 
+-- A constructor argument may only mention the type's own parameters.  Left free, the
+-- variable would be existential: every use of `Mk` would pick its own type for the
+-- field, so `Mk 3` and `Mk true` would both be a `T`, and `unMk` would read a `Bool`
+-- back out as an `Int`.
+/--
+error: The type variable a is not in scope in the definition of T: only the type parameters of T may be used here.  Declare it, as in `type T<a> := ...`.
+-/
+#guard_msgs in
+{lait_decl dtCtorFreeTyVar
+  type T := | Mk (val : a)
+}
+
+-- Reported even when the type has parameters, if the argument names another one.
+/--
+error: The type variable b is not in scope in the definition of T: only the type parameters of T may be used here.  Declare it, as in `type T<a, b> := ...`.
+-/
+#guard_msgs in
+{lait_decl dtCtorFreeTyVarPartial
+  type T<a> := | Ok (v : a) | Oops (l : a) (r : b)
+}
+
+-- Declaring the parameter is what makes it polymorphic instead: the caller of `Mk`
+-- picks the field's type, and it shows up in the type of the value.
+/--
+info: Int
+---
+info: T<Bool>
+-/
+#guard_msgs in
+{lait_decl dtCtorTyVarDeclared
+  type T<a> := | Mk (val : a)
+  def unMk (x : T<a>) : a := match x with | Mk v => v end
+  #test unMk (Mk 3) === 3
+  #check unMk (Mk 3)
+  #check Mk true
+}
+
 -- CURRENT BEHAVIOR: the arity message says neither how many arguments the type
 -- takes nor how many were supplied.
 /-- error: Wrong number of arguments to Box -/

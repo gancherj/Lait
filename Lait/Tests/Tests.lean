@@ -163,7 +163,7 @@ import Lait.Elab
   #eval unwrap (SomeN 42) 0                            -- 42
   #eval unwrap NoneN 99                                -- 99
 
-  type Foo := optN
+  type Foo := OptN
 
   type NatList := | Nil | Cons (h : Int) (t : NatList)
 

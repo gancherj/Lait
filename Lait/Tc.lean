@@ -335,6 +335,30 @@ def checkTyNameFresh (stx : Lean.Syntax) (tname : String) : Check n Unit := do
   if (← read).tyMap.contains tname then
     throwErrorAt stx s!"Type {tname} is already defined"
 
+-- The first free type variable in `t`, together with the syntax that wrote it.
+partial def Ty.looseVar? : Ty n → Option (Lean.Syntax × Lean.Name)
+  | .mk stx (.FVar a) => some (stx, a)
+  | .mk _ (.Arrow t1 t2) | .mk _ (.Prod t1 t2) => t1.looseVar? <|> t2.looseVar?
+  | .mk _ (.Ref t) => t.looseVar?
+  | .mk _ (.TApp _ ts) => ts.findSome? Ty.looseVar?
+  | .mk _ (.Var _) | .mk _ .Int | .mk _ .Bool | .mk _ .Str | .mk _ .Unit => none
+
+-- The only type variables a `type` declaration may mention are the parameters it declares.
+-- `Ty.fromSurface` turns those into bound `Var`s, so an `FVar` anywhere in the declaration
+-- is a variable nothing binds.  Nothing later would catch it: an alias body would carry it
+-- into every expansion, and a constructor argument spelled with it would be an
+-- *existential* -- each use of the constructor solves it separately, so `Mk 3` and
+-- `Mk true` would both have the declared type, and the match arm reading the field back
+-- would get whichever the compiler happened to see first.
+def checkTyVarsInScope (dstx : Lean.Syntax) (tname : String) (tvars : List String)
+    (t : Ty n) : Check m Unit := do
+  if let some (stx, a) := t.looseVar? then
+    let params := ", ".intercalate (tvars ++ [toString a])
+    throwErrorAt (if stx.getPos?.isSome then stx else dstx)
+      s!"The type variable {a} is not in scope in the definition of {tname}: only the \
+        type parameters of {tname} may be used here.  Declare it, as in \
+        `type {tname}<{params}> := ...`."
+
 -- ---- Instantiation ----
 
 def TyScheme.mono (t : Ty 0) : TyScheme := { tyVars := [], ty := t }
@@ -905,12 +929,16 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
     checkTyNameFresh dstx tname
     if alias.tyVars.hasDup then
       throwErrorAt dstx s!"Type alias cannot have duplicate type variables"
+    checkTyVarsInScope dstx tname alias.tyVars alias.ty
     let _ ← normalizeTy alias.ty
     withReader (fun env => { env with tyMap := env.tyMap.insert tname (.Alias alias) }) k
   | _, _, .mk dstx (.DeclInductive tname tvars cs), k => do
     checkTyNameFresh dstx tname
     if tvars.hasDup then
       throwErrorAt dstx s!"Type definition cannot have duplicate type variables"
+    for (_, args) in cs do
+      for (_, argTy) in args do
+        checkTyVarsInScope dstx tname tvars argTy
     -- Constructor names are global: reject a repeat within this declaration or a clash
     -- with an existing operator/constructor, so no `opMap` entry is silently overwritten.
     let env ← read

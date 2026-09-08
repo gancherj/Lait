@@ -95,24 +95,35 @@ info: List<Int>
   #test List.filter [1, - 1, 2] isPos === [1, 2]
 }
 
--- CURRENT BEHAVIOR: a type variable free in the body becomes an implicit
--- parameter, so `type Weird := a * a` silently has arity one.  The only sign is
--- the arity error when you then write `Weird` bare.  REPORT.md P12.
+-- An alias's parameters are exactly the ones it declares: a type variable free in
+-- the body is out of scope, not an implicit parameter.  REPORT.md P12.
 /--
-info: Int * Int
+error: The type variable a is not in scope in the definition of Weird: only the type parameters of Weird may be used here.  Declare it, as in `type Weird<a> := ...`.
 -/
 #guard_msgs in
 {lait_decl aliasImplicitParameter
   type Weird := a * a
+}
+
+-- Declaring the parameter is what the message asks for, and it works.
+/--
+info: Int * Int
+-/
+#guard_msgs in
+{lait_decl aliasImplicitParameterDeclared
+  type Weird<a> := a * a
   def q : Weird<Int> := (1, 2)
   #check q
 }
 
-/-- error: Wrong number of arguments to Weird -/
+-- A variable missing from a non-empty parameter list is reported the same way, and
+-- the suggested list keeps the parameters already declared.
+/--
+error: The type variable b is not in scope in the definition of Weird: only the type parameters of Weird may be used here.  Declare it, as in `type Weird<a, b> := ...`.
+-/
 #guard_msgs in
-{lait_decl aliasImplicitParameterArity
-  type Weird := a * a
-  def q : Weird := (1, 2)
+{lait_decl aliasPartiallyDeclared
+  type Weird<a> := a * b
 }
 
 -- ===== An alias in a constructor's argument type =====

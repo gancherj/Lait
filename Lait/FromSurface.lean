@@ -108,7 +108,10 @@ partial def Decl.fromSurfaceEntry (d : Surface.DeclEntry) (vars : List String) :
     let e' <- Exp.fromSurface e [] vars
     pure ⟨vars, .mk d.stx (.DeclCheck e')⟩
   | .DeclEntryTypeAlias s tvars ty => do
-    let tvars := if tvars.isEmpty then ty.tyVars else tvars
+    -- The parameters of an alias are exactly the ones written in its `<...>`; a type
+    -- variable the body mentions but does not declare stays free, and `Decl.check`
+    -- rejects it.  Reading them off the body instead would silently give
+    -- `type Weird := a * a` a parameter nobody wrote.
     let ty' <- Ty.fromSurface ty tvars
     pure ⟨vars, .mk d.stx (.DeclTypeAlias s ⟨tvars, ty'⟩)⟩
   | .DeclEntryDefFn _ _ _ _ => throwError "DefFn: should be eliminated via surface pass"
