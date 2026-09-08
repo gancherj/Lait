@@ -23,11 +23,6 @@ partial def Ty.fromSurface (ty : Surface.Ty) (tvars : List String) : CommandElab
     match tvars.findFinIdx? (· == s) with
     | some i => pure (.mk stx (.Var i))
     | none => pure (.mk stx (.FVar (s.toName)))
-  | .mk stx (.Record xs) => do
-    let xs' <- xs.mapM (fun (x, y) => do
-      let y' <- fromSurface y tvars
-      pure (x, y'))
-    pure (.mk stx (.Record xs'))
 
 mutual
 partial def Exp.fromSurface (exp : Surface.Exp) (tvars : List String) (vars : List String) : CommandElabM (Exp tvars.length vars.length) :=
@@ -74,13 +69,6 @@ partial def Exp.fromSurface (exp : Surface.Exp) (tvars : List String) (vars : Li
     pure (.mk stx (.Match (<- Exp.fromSurface e tvars vars) cases'))
   | .mk stx (.Rec x e) => do
       pure (.mk stx (.Rec x (<- Exp.fromSurface e tvars (x :: vars))))
-  | .mk stx (.RecordGet e x) => do
-      pure (.mk stx (.RecordGet (<- Exp.fromSurface e tvars vars) x))
-  | .mk stx (.MkRecord xs) => do
-      let xs' <- xs.mapM (fun (x, e) => do
-        let e' <- Exp.fromSurface e tvars vars
-        pure (x, e'))
-      pure (.mk stx (.MkRecord (ExpRecord.fromList xs')))
 
 partial def casesFromSurface (cases : List (String × List String × Surface.Exp)) (owild : Option Surface.Exp) (tvars : List String) (vars : List String) : CommandElabM (ExpMatchCases tvars.length vars.length) :=
   match cases with
@@ -120,7 +108,10 @@ partial def Decl.fromSurfaceEntry (d : Surface.DeclEntry) (vars : List String) :
     let e' <- Exp.fromSurface e [] vars
     pure ⟨vars, .mk d.stx (.DeclCheck e')⟩
   | .DeclEntryTypeAlias s tvars ty => do
-    let tvars := if tvars.isEmpty then ty.tyVars else tvars
+    -- The parameters of an alias are exactly the ones written in its `<...>`; a type
+    -- variable the body mentions but does not declare stays free, and `Decl.check`
+    -- rejects it.  Reading them off the body instead would silently give
+    -- `type Weird := a * a` a parameter nobody wrote.
     let ty' <- Ty.fromSurface ty tvars
     pure ⟨vars, .mk d.stx (.DeclTypeAlias s ⟨tvars, ty'⟩)⟩
   | .DeclEntryDefFn _ _ _ _ => throwError "DefFn: should be eliminated via surface pass"

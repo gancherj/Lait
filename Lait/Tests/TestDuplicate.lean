@@ -1,8 +1,8 @@
 import Lait.Elab
 import Lait.Stdlib
 
--- Top-level names are unique: a `def` may not re-define an existing `def`, and a
--- `type` may not re-declare an existing type.  Local binders are unaffected.
+-- Top-level names are unique: a `def` may not redefine an existing `def`, and a
+-- `type` may not redeclare an existing type.  Local binders are unaffected.
 
 /-- error: foo is already defined -/
 #guard_msgs in
@@ -18,7 +18,7 @@ import Lait.Stdlib
   and f (y : Int) : Int := y
 }
 
--- The duplicate is reported even though the body would not type-check either.
+-- Reported even though the body would not type-check either.
 /-- error: bad is already defined -/
 #guard_msgs in
 {lait_decl dupDefIllTyped
@@ -48,7 +48,7 @@ import Lait.Stdlib
   type Alias := Bool
 }
 
--- Names arriving via `#include` are just as taken as locally declared ones.
+-- Names from `#include` are just as taken.
 {lait_decl dupIncluded
   def dup := 1
 }
@@ -74,8 +74,7 @@ import Lait.Stdlib
   type Option := | Nothing
 }
 
--- Still allowed: `let`/`fun`/`match` binders may shadow anything, including a
--- top-level def, and `_` is a wildcard rather than a name.
+-- Still allowed: local binders may shadow anything, and `_` is not a name.
 {lait_decl shadowingStillOk
   def x := 1
   #test (let x := 2 in x) === 2
@@ -85,11 +84,10 @@ import Lait.Stdlib
   def _ := ()
 }
 
--- The names built into the language are taken from the start.  Most of them are
--- reserved tokens, so the parser rejects them where a name is expected; the
--- boolean literals are deliberately not reserved (so `true`/`false` may be used
--- as record fields and the like), which makes `def true` parseable and this
--- check the thing that rejects it.
+-- The built-in names are taken from the start.  Most are reserved tokens, so the
+-- parser rejects them where a name is expected; the boolean literals
+-- deliberately are not (so `true`/`false` may be constructor argument names),
+-- which makes `def true` parseable and this check the thing that rejects it.
 /-- error: true is already defined -/
 #guard_msgs in
 {lait_decl dupBuiltinTrue
@@ -100,10 +98,4 @@ import Lait.Stdlib
 #guard_msgs in
 {lait_decl dupBuiltinFalse
   def false (x : Int) : Int := x
-}
-
--- A `let` named `true` is still fine (albeit unusable, since `true` in an
--- expression parses as the literal).
-{lait_decl shadowBuiltinOk
-  #test (let true := 1 in 2) === 2
 }

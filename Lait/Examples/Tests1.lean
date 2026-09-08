@@ -1,37 +1,23 @@
 import Lait
 #lait
 
-def foo := 1234
-def id  := fun x => x
 
-type IntPair := Int * Int
+-- The following are rejected because the type variable is out of scope.
+-- Each is expected to be red: this file is the demonstration.
 
-#check alloc []
+-- Type aliases: `a` is not a parameter of `Bad1`, so it is not in scope in the body.
+-- (Previously it silently became one, giving `Bad1` an arity nobody wrote.)
+type Bad1 := a * a
 
-type MyPair<a> := List<List<a>>
-
-type NatTree :=
-  | NTLeaf (v : Int)
-  | NTNode (l : NatTree) (r : NatTree)
-
-type BinTree<a> :=
-  | BTLeaf (v : a)
-  | BTNode (l : BinTree<a>) (r : BinTree<a>)
-
-type Tree :=
-  | Leaf (v : Int)
-  | Node (t1 : Tree) (t2 : Tree)
-
-def fib? := fix f. fun n => if n < 2 then 1 else f (n - 1) + f (n - 2)
-#eval fib? 17
+-- Datatypes: `a` is not a parameter of `Bad2`, so `Bad`'s field has no type to be.
+-- (Previously it was existential -- `Bad 3` and `Bad true` both had type `Bad2`, and
+-- reading the field back at `Int` was a well-typed program that crashed.)
+type Bad2 := | Bad (val : a)
 
 
-def test := Node (Node (Leaf 1) (Leaf 2)) (Leaf 3)
+-- Declaring the parameter is what both of them meant:
+type Good1<a> := a * a
+type Good2<a> := | Good (val : a)
 
-def testList := Cons 1 (Cons 2 [])
-
-#eval testList
-
-#eval "hi"
-
-#eval 111
+def foo : Good1<Int> := (3, 5)
+def bar : Good2<Int> := Good 3

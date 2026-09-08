@@ -31,23 +31,12 @@ import Lait.Examples.Tests1
 -- type Status := | Ok | Err
 -- type Visibility := | Public | Hidden
 --
--- type Result := {
---   label : String,
---   value : Int,
---   threshold : Option<Int>,
---   status : Status,
---   message : Option<String>,
---   visibility : Visibility
--- }
+-- type Result :=
+--   | MkResult (label : String) (value : Int) (threshold : Option<Int>)
+--              (status : Status) (message : Option<String>) (visibility : Visibility)
 --
--- def exampleResult : Result := {
---   label := "Example",
---   value := 10,
---   threshold := Some 10,
---   status := Ok,
---   message := Some "Example output",
---   visibility := Public
--- }
+-- def exampleResult : Result :=
+--   MkResult "Example" 10 (Some 10) Ok (Some "Example output") Public
 --
 -- /- -/
 --

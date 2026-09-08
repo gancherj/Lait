@@ -56,9 +56,6 @@ def getLastEvalResult (name : Name) : CoreM (Option EvalResult) := do
   return ((laitEvalExt.getState (← getEnv)).find? name).getD #[] |>.back?
 
 declare_syntax_cat lait_ty
-declare_syntax_cat lait_ty_field
-
-syntax ident ":" lait_ty : lait_ty_field
 
 /--
 The type of whole numbers: both negative and positive integers.
@@ -81,15 +78,18 @@ syntax "Unit" : lait_ty
 The type of functions: `t1 -> t2` means a function that takes an argument of type `t1` and returns a value of type `t2`.
 Functions in Lait are _impure_, meaning that they can do things like access mutable state and throw errors.
 -/
-syntax lait_ty "->" lait_ty : lait_ty
+-- Right-associative and looser than `*`, as in ML: `a * b -> c -> d` is
+-- `(a * b) -> (c -> d)`.
+syntax:25 lait_ty:26 "->" lait_ty:25 : lait_ty
 /--
 The type of pairs: `t1 * t2` means a pair of values, one of type `t1` and one of type `t2`.
 -/
-syntax lait_ty "*" lait_ty : lait_ty
+-- Binds tighter than `->`, and right-associative: `a * b * c` is `a * (b * c)`, a pair
+-- whose second component is a pair.
+syntax:35 lait_ty:36 "*" lait_ty:35 : lait_ty
 syntax "(" lait_ty ")" : lait_ty
 syntax ident "<" lait_ty,* ">" : lait_ty
 syntax ident : lait_ty
-syntax "{" lait_ty_field,* "}" : lait_ty
 /--
 The type of mutable references `Ref<t>` to values of type `t`.
 - To create a new mutable reference of type `Ref<t>`, use `alloc e`, where `e` should have type `t`.
@@ -117,16 +117,6 @@ partial def firstCharUpper (i : Ident) : TermElabM _root_.Bool :=
   | none => throwError "should be unreachable"
   | some c => pure c.isUpper
 
-mutual
-
-partial def elabLaitTyField (f : Lean.TSyntax `lait_ty_field) : TermElabM (_root_.String × Surface.Ty) :=
-  match f with
-  | `(lait_ty_field | $id:ident : $t:lait_ty) => do
-    let name := id.getId.toString
-    let ty ← elabLaitTy t
-    pure (name, ty)
-  | _ => throwUnsupportedSyntax
-
 partial def elabLaitTy (t : Lean.TSyntax `lait_ty) : TermElabM Surface.Ty :=
   match t with
   | `(lait_ty | Int) => mkSurfaceTy t.raw .Int
@@ -148,14 +138,9 @@ partial def elabLaitTy (t : Lean.TSyntax `lait_ty) : TermElabM Surface.Ty :=
         mkSurfaceTy t.raw (.TApp id.getId.toString [])
       else do
         mkSurfaceTy t.raw (.Var id.getId.toString)
-  | `(lait_ty | {$fs:lait_ty_field,*}) => do
-    let fields <- fs.getElems.mapM elabLaitTyField
-    mkSurfaceTy t.raw (.Record fields.toList)
   | `(lait_ty | Ref < $t:lait_ty >) => do
     mkSurfaceTy t.raw (.Ref (← elabLaitTy t))
   | _ => throwUnsupportedSyntax
-
-end
 
 elab "{lait_ty" t:lait_ty "}" : term => do
   return toExpr (← elabLaitTy t)
@@ -172,7 +157,6 @@ declare_syntax_cat lait_match_arm
 declare_syntax_cat lait_typed_var
 declare_syntax_cat lait_param
 declare_syntax_cat lait_ident
-declare_syntax_cat lait_field
 
 syntax "_" : lait_ident
 syntax ident : lait_ident
@@ -244,9 +228,6 @@ syntax "|" ident lait_ident* "=>" lait_exp : lait_match_arm
 syntax "|" "[]" "=>" lait_exp : lait_match_arm
 syntax "|" lait_ident "::" lait_ident "=>" lait_exp : lait_match_arm
 syntax "|" "_" "=>" lait_exp : lait_match_arm
-syntax lait_exp "^" ident : lait_exp
-syntax ident ":=" lait_exp : lait_field
-syntax "{" lait_field,* "}" : lait_exp
 syntax "%" ident "{" lait_exp,* "}" : lait_exp
 syntax "[]" : lait_exp
 syntax "[" lait_exp,+ "]" : lait_exp
@@ -299,6 +280,8 @@ partial def elabLaitMatchArm (a : Lean.TSyntax `lait_match_arm) : TermElabM (Sum
   | `(lait_match_arm | | $c:ident $ids:lait_ident* => $bdy:lait_exp) => do
     let bdy <- elabLaitExp bdy
     let ids' ← ids.mapM elabLaitIdent
+    if (ids'.toList.filter (· != "_")).hasDup then
+      throwErrorAt a "Duplicate variables in pattern match"
     pure (.inl (c.getId.toString, ids'.toList, bdy))
   | `(lait_match_arm | | [] => $bdy:lait_exp) => do
     let bdy <- elabLaitExp bdy
@@ -310,21 +293,29 @@ partial def elabLaitMatchArm (a : Lean.TSyntax `lait_match_arm) : TermElabM (Sum
     pure (.inl ("Cons", [c', id'], bdy))
   | _ => throwUnsupportedSyntax
 
-partial def elabLaitField (f : Lean.TSyntax `lait_field) : TermElabM (_root_.String × Surface.Exp) :=
-  match f with
-  | `(lait_field | $id:ident := $e:lait_exp) => do
-    let e ← elabLaitExp e
-    pure (id.getId.toString, e)
-  | _ => throwUnsupportedSyntax
-
+-- `[e1, ..., en]` is `Cons e1 (Cons ... Nil)`.  The spine is not written anywhere, so each
+-- link is positioned over the stretch of the literal it stands for -- `[1, 2, 3]`, then
+-- `2, 3]`, then `3]` -- rather than every link over the whole literal, which would stack
+-- one hover per element on it, half of them the type of a half-applied `Cons`.  The
+-- `Cons` itself, the half-application, and the final `Nil` correspond to nothing in the
+-- source; they are collapsed to a point, which is too narrow for a hover to attach to but
+-- still positions an error (`Cons` resolves against the environment, so it does fail --
+-- "Variable Cons not found" -- in a block that never included the stdlib).
 partial def elabLaitListExp (stx : Lean.Syntax) (es : List (Lean.TSyntax `lait_exp)) : TermElabM Surface.Exp :=
   match es with
   | List.nil => mkSurfaceExp stx (.Var "Nil")
   | List.cons e es => do
-    let e ← elabLaitExp e
-    let es ← elabLaitListExp stx es
+    let hd ← elabLaitExp e
+    -- The tail runs from the next element to this node's own end, and after the last one
+    -- collapses to the closing bracket.
+    let tlStx := match es.head?.bind (·.raw.getRange?), stx.getRange? with
+      | some r, some here => Lean.Syntax.ofRange ⟨r.start, here.stop⟩
+      | none, some here => Lean.Syntax.ofRange ⟨here.stop, here.stop⟩
+      | _, _ => .missing
+    let tl ← elabLaitListExp tlStx es
     mkSurfaceExp stx $
-       (.App (<- mkSurfaceExp stx $ .App (.Var "Cons") e) es)
+       (.App (<- mkSurfaceExp stx.startMarker $
+          .App (<- mkSurfaceExp stx.startMarker (.Var "Cons")) hd) tl)
 
 
 partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
@@ -340,13 +331,18 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | error $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Error (← elabLaitExp e1))
   | `(lait_exp | ...) => do
-    match e.raw.getRange? with
-    | none =>  elabLaitExp (<- `(lait_exp| error "unimplemented"))
-    | some range =>
-      let pos := (← getFileMap).toPosition range.start
-      let s : TSyntax `str :=
-        Syntax.mkStrLit s!"unimplemented: {← getFileName}, Line {pos.line}, Column {pos.column}"
-      elabLaitExp (<- `(lait_exp| error $s:str))
+    -- Built here rather than by re-elaborating a `(lait_exp| error ...)` quotation: a
+    -- quotation's nodes are positioned at the elaborator's *ref*, which is the whole
+    -- `{lait_decl …}` command, and `mkSurfaceExp` would then hang this expression's hover
+    -- over the entire block.
+    let msg ← match e.raw.getRange? with
+      | none => pure "unimplemented"
+      | some range =>
+        let pos := (← getFileMap).toPosition range.start
+        pure s!"unimplemented: {← getFileName}, Line {pos.line}, Column {pos.column}"
+    -- The message is not written anywhere, so it is left position-less: hovering `...`
+    -- reports the type of the `error`, not `String`.
+    mkSurfaceExp e.raw (.Error (← mkSurfaceExp .missing (.Const (.String msg))))
   | `(lait_exp | internal_print $e1:lait_exp) => do
     mkSurfaceExp e.raw (.Print (← elabLaitExp e1))
   | `(lait_exp | $n:num) =>
@@ -397,9 +393,14 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | not $e1:lait_exp) => mkLaitUnary e.raw "not" e1
   | `(lait_exp | $e1:lait_exp ++ $e2:lait_exp) => mkLaitInfix e.raw "++" e1 e2
   | `(lait_exp | $e1:lait_exp :: $e2:lait_exp) => do
+    -- Only the whole `e1 :: e2` is written; the `Cons` it applies and the half-application
+    -- in between are not, and positioning them here too would put three hovers on the same
+    -- range -- two of them types of a `Cons` that appears nowhere in the source.  They are
+    -- collapsed to a point rather than dropped, as in `elabLaitListExp`, so that an
+    -- unresolved `Cons` is still reported here.
     mkSurfaceExp e.raw $
-      .App (<- mkSurfaceExp e.raw $
-         .App (<- mkSurfaceExp e.raw (.Var "Cons")) (<- elabLaitExp e1))
+      .App (<- mkSurfaceExp e.raw.startMarker $
+         .App (<- mkSurfaceExp e.raw.startMarker (.Var "Cons")) (<- elabLaitExp e1))
          (<- elabLaitExp e2)
   | `(lait_exp | [] ) => mkSurfaceExp e.raw (.Var "Nil")
   | `(lait_exp | [$es:lait_exp,*]) => do
@@ -410,7 +411,10 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
   | `(lait_exp | $e1:lait_exp >= $e2:lait_exp) => mkLaitInfix e.raw ">=" e1 e2
   | `(lait_exp | $e1:lait_exp == $e2:lait_exp) => mkLaitInfix e.raw "==" e1 e2
   | `(lait_exp | $e1:lait_exp != $e2:lait_exp) => do
-     elabLaitExp (<- `(lait_exp | not ($e1:lait_exp == $e2:lait_exp)))
+     -- `not (e1 == e2)`, built directly so that both nodes are positioned at `e1 != e2`.
+     -- Going through a quotation positions them at the elaborator's ref instead -- the
+     -- whole `{lait_decl …}` command -- which puts a `Bool` hover over the entire block.
+     mkSurfaceExp e.raw (.Op "not" [← mkLaitInfix e.raw "==" e1 e2])
   | `(lait_exp | $e1:lait_exp && $e2:lait_exp) => mkLaitInfix e.raw "&&" e1 e2
   | `(lait_exp | $e1:lait_exp || $e2:lait_exp) => mkLaitInfix e.raw "||" e1 e2
   | `(lait_exp | fst $e2:lait_exp) => do
@@ -433,11 +437,6 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
         | .inl c => ctorArms := ctorArms.push c
         | .inr w => owild := some w
       mkSurfaceExp e.raw (.Match scrut ctorArms.toList owild)
-  | `(lait_exp | {$fs:lait_field,*}) => do
-    let fields <- fs.getElems.mapM elabLaitField
-    mkSurfaceExp e.raw (.MkRecord fields.toList)
-  | `(lait_exp | $e1:lait_exp ^ $id:ident) => do
-    mkSurfaceExp e.raw (.RecordGet (← elabLaitExp e1) id.getId.toString)
   | _ => throwUnsupportedSyntax
 end
 
@@ -502,6 +501,16 @@ type BinTree<a> :=
   | BTLeaf (v : a)
   | BTNode (l : BinTree<a>) (r : BinTree<a>)
 ```
+
+A type with exactly one constructor also gets a field accessor for each of that
+constructor's named arguments.  For example
+
+```
+type Point := | MkPoint (x : Int) (y : Int)
+```
+
+defines `Point.x : Point -> Int` and `Point.y : Point -> Int` alongside `MkPoint`.
+An argument named `_` gets no accessor.
 -/
 syntax "type" : lait_type_kw
 
@@ -632,7 +641,16 @@ partial def elabLaitDecl (st : IO.Ref IncludeState) (d : Lean.TSyntax `lait_decl
       | `(lait_and_type | and $id:ident $[< $ts:ident,* >]? := $cs:lait_inductive_constr*) =>
           elabClause a id ts cs
       | _ => throwUnsupportedSyntax
-    mkSurfaceDeclEntry d.raw (.DeclEntryMutualTypes (first :: rest.toList))
+    let tys := first :: rest.toList
+    let ind ← mkSurfaceDeclEntry d.raw (.DeclEntryMutualTypes tys)
+    -- Every type in the group that has exactly one constructor also gets a field
+    -- accessor per named constructor argument.  They are emitted after the whole
+    -- group, so an accessor whose result type is a sibling still resolves.
+    let getters := tys.flatMap fun (tname, tvs, cs) =>
+      match cs with
+      | [(cname, args)] => Surface.DeclEntry.mkGetters d.raw tname tvs cname args
+      | _ => List.nil
+    mkSurfaceDeclEntry d.raw (.DeclList (ind :: getters))
   | `(lait_decl | #eval $e:lait_exp) => do
     let e ← elabLaitExp e
     mkSurfaceDeclEntry d.raw (.DeclEval e)
@@ -697,14 +715,11 @@ structure LaitCtx where
   n : Nat
   vars : List _root_.String
   hvars : vars.length = n
-  varMap : Vec n TyScheme
-  varLocs : Vec n (Option DeclarationLocation)
+  /-- The accumulated top-level bindings; see `TcEnv.vars`. -/
+  vars' : Vec n VarInfo
   opMap : Std.TreeMap _root_.String OpSig
   tyMap : Std.TreeMap _root_.String TyVal
   frozen : Lean.NameSet
-  /-- Which accumulated top-level names are constructor functions, by de Bruijn
-  level; see `TcEnv.ctorLevels`. -/
-  ctorLevels : Std.TreeSet Nat
   freshCounter : Nat
   evalEnv : List Val
   evalState : EvalState
@@ -718,8 +733,8 @@ structure LaitCtx where
 
 instance : Inhabited LaitCtx where
   default :=
-    { n := 0, vars := List.nil, hvars := rfl, varMap := Vec.nil, varLocs := Vec.nil
-      opMap := initTcOpMap, tyMap := initTyMap, frozen := {}, ctorLevels := {}
+    { n := 0, vars := List.nil, hvars := rfl, vars' := Vec.nil
+      opMap := initTcOpMap, tyMap := initTyMap, frozen := {}
       freshCounter := 0, evalEnv := List.nil, evalState := EvalState.new
       included := {}, defLocs := {} }
 
@@ -734,8 +749,8 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     let decl' : Decl ctx.n vars'.length := ctx.hvars ▸ decl
     let startEnv : TcEnv ctx.n :=
       { opMap := ctx.opMap, tyMap := ctx.tyMap, curSyntax := (← getRef)
-        frozen := ctx.frozen, varMap := ctx.varMap, varLocs := ctx.varLocs
-        ctorLevels := ctx.ctorLevels, defLocs := ctx.defLocs
+        frozen := ctx.frozen, vars := ctx.vars'
+        defLocs := ctx.defLocs, tyVarScope := {}
         -- `vars` is exactly the list of top-level `def` names accumulated so
         -- far, so the type checker's uniqueness check needs no extra state
         -- beyond the language's built-in names.
@@ -743,16 +758,15 @@ def processBatch (ctx : LaitCtx) (ds : List Surface.DeclEntry) : CommandElabM La
     -- The continuation runs at the final depth, so it sees the fully-extended
     -- typing environment (all defs/types of this batch in scope).
     let capture : Check vars'.length
-        (Vec vars'.length TyScheme × Vec vars'.length (Option DeclarationLocation) ×
-          Std.TreeMap _root_.String OpSig × Std.TreeMap _root_.String TyVal × Lean.NameSet ×
-          Std.TreeSet Nat) := do
+        (Vec vars'.length VarInfo × Std.TreeMap _root_.String OpSig ×
+          Std.TreeMap _root_.String TyVal × Lean.NameSet) := do
       let e ← read
-      pure (e.varMap, e.varLocs, e.opMap, e.tyMap, e.frozen, e.ctorLevels)
-    let ((vm, vl, om, tm, fr, cl), st) ← liftTermElabM <|
+      pure (e.vars, e.opMap, e.tyMap, e.frozen)
+    let ((vi, om, tm, fr), st) ← liftTermElabM <|
       ((Decl.check decl' capture).run startEnv).run { freshCounter := ctx.freshCounter }
     let (evalEnv', evalState') ← liftTermElabM <| Decl.runFrom decl ctx.evalEnv ctx.evalState
-    pure { n := vars'.length, vars := vars', hvars := rfl, varMap := vm, varLocs := vl
-           opMap := om, tyMap := tm, frozen := fr, ctorLevels := cl
+    pure { n := vars'.length, vars := vars', hvars := rfl, vars' := vi
+           opMap := om, tyMap := tm, frozen := fr
            freshCounter := st.freshCounter
            evalEnv := evalEnv', evalState := evalState', included := ctx.included
            defLocs := ctx.defLocs }
@@ -917,11 +931,12 @@ def laitCompletionItems (ctx : LaitCtx) (uri : DocumentUri) (pos : Lsp.Position)
   let data : ResolvableCompletionItemData := { uri, pos }
   let mut items : Array ResolvableCompletionItem := #[]
   let mut seen : List _root_.String := List.nil
-  for (name, sch) in ctx.vars.zip ctx.varMap.val do
+  for (name, info) in ctx.vars.zip ctx.vars'.val do
     unless name == "_" || seen.contains name do
       seen := name :: seen
       items := items.push
-        { label := name, detail? := some sch.pretty, kind? := some .«variable», data? := some data }
+        { label := name, detail? := some info.scheme.pretty, kind? := some .«variable»,
+          data? := some data }
   for tname in ctx.tyMap.keys do
     unless seen.contains tname do
       seen := tname :: seen

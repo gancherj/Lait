@@ -25,7 +25,6 @@ inductive TyX where
   | Ref : Ty -> TyX
   -- Ticked type variables
   | Var : String -> TyX
-  | Record : List (String × Ty) -> TyX
   deriving Repr, Lean.ToExpr
 end
 
@@ -46,8 +45,6 @@ private partial def collectTyVars (t : Ty) : List String :=
   | .mk _ .Bool => []
   | .mk _ .Str => []
   | .mk _ .Unit => []
-  | .mk _ (.Record xs) =>
-      (xs.attach.map fun ⟨x, _⟩ => x.2.collectTyVars).flatten
 
 def tyVars (t : Ty) : List String :=
   t.collectTyVars.eraseDups.mergeSort
@@ -88,8 +85,6 @@ inductive ExpX where
   | Assign : Exp -> Exp -> ExpX
   -- `try e1 with e2 end`: evaluate e1; if it raises an error, evaluate e2.
   | Try : Exp -> Exp -> ExpX
-  | RecordGet : Exp -> String -> ExpX
-  | MkRecord : List (String × Exp) -> ExpX
   deriving Repr, Lean.ToExpr
 end
 
@@ -131,8 +126,6 @@ partial def substVars (m : List (String × Exp)) : Exp -> Exp
       .mk stx (.Match (substVars m e)
         (cases.map fun (c, xs, b) => (c, xs, substVars (rem xs) b))
         (owild.map (substVars m)))
-    | .RecordGet e x => .mk stx (.RecordGet (substVars m e) x)
-    | .MkRecord xs => .mk stx (.MkRecord (xs.map fun (n, e) => (n, substVars m e)))
 
 -- Right-nested tuple of a non-empty list (a singleton is the element itself).
 def mkTuple : List Exp -> Exp
@@ -237,6 +230,24 @@ def mkConstrFns (stx : Lean.Syntax) (c : String) (tvs : List String)
         .Lam v (some argTy) $ go args' (vars ++ [v]) (i + 1)
     let fullTy : Ty := args.foldr (fun (_, argTy) acc => .Arrow argTy acc) outTy
     (⟨stx.startMarker, .DeclEntryDef cname (some fullTy) (go args [] 0)⟩ : DeclEntry)
+
+-- The field accessors of a single-constructor inductive type `c`: each constructor
+-- argument `(f : T)` becomes
+-- `def c.f (self : c<tvs>) : T := match self with | k x_1 ... x_n => f end`.
+-- The pattern binds every argument under its declared name, so the arm body is just
+-- the one we want; a field named `self` shadows the parameter, which is harmless
+-- since the parameter is not otherwise used.  Arguments named `_` are skipped --
+-- `_` means "this field has no name", and two of them would collide.  `stx` is
+-- collapsed to a point for the same reason as in `mkConstrFns`.
+def mkGetters (stx : Lean.Syntax) (c : String) (tvs : List String)
+    (k : String) (args : List (String × Ty)) : List DeclEntry :=
+  let selfTy : Ty := .TApp c (tvs.map .Var)
+  let argNames := args.map (·.1)
+  args.filterMap fun (f, fTy) =>
+    if f == "_" then none else
+    let body : Exp := .mk .missing (.Match (.Var "self") [(k, argNames, .Var f)] none)
+    some (⟨stx.startMarker, .DeclEntryDef s!"{c}.{f}" (some (.Arrow selfTy fTy))
+        (Exp.Lam "self" (some selfTy) body)⟩ : DeclEntry)
 
 def elabConstrFns (d : DeclEntry) : List DeclEntry :=
   match d.val with
