@@ -55,6 +55,28 @@ def getEvalResults (name : Name) : CoreM (Array EvalResult) := do
 def getLastEvalResult (name : Name) : CoreM (Option EvalResult) := do
   return ((laitEvalExt.getState (← getEnv)).find? name).getD #[] |>.back?
 
+/-- Whether `...` should leave the file name and column out of the message it raises; set
+by `#no_file`.  A plain (non-persistent) `EnvExtension`, so the flag is scoped to the file
+that sets it -- it is captured per command snapshot, like `laitCtxExt`, and importers start
+from the default again. -/
+initialize laitNoFileExt : EnvExtension Bool ← registerEnvExtension (pure Bool.false)
+
+/-- Whether `#no_file` is in effect; see the `...` case of `elabLaitExp`. -/
+def getNoFile : CoreM Bool := do
+  return laitNoFileExt.getState (← getEnv)
+
+/--
+Shortens the message that `...` raises to just `unimplemented: Line N`, leaving out the
+file name and column, for the rest of the file.  The full location names an absolute path,
+which makes the message machine-specific and so awkward to write down in a test or a
+textbook example.
+
+In a `#lait` file this has to go *above* the `#lait` line, which is where Lean commands
+stop being parsed.
+-/
+elab "#no_file" : command => do
+  modifyEnv (laitNoFileExt.setState · Bool.true)
+
 declare_syntax_cat lait_ty
 
 /--
@@ -339,7 +361,10 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
       | none => pure "unimplemented"
       | some range =>
         let pos := (← getFileMap).toPosition range.start
-        pure s!"unimplemented: {← getFileName}, Line {pos.line}, Column {pos.column}"
+        if ← getNoFile then
+          pure s!"unimplemented"
+        else
+          pure s!"unimplemented: {← getFileName}, Line {pos.line}, Column {pos.column}"
     -- The message is not written anywhere, so it is left position-less: hovering `...`
     -- reports the type of the `error`, not `String`.
     mkSurfaceExp e.raw (.Error (← mkSurfaceExp .missing (.Const (.String msg))))

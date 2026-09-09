@@ -657,10 +657,8 @@ def closeBinding (stx : Lean.Syntax) (name : String) (us envFV : Lean.NameSet)
   -- Unlike at a `let`, a top-level non-value's left-over variables cannot simply stay
   -- free: nothing later could determine them, since each command elaborates alone.
   if topLevel && !isVal && !generalized.tyVars.isEmpty then
-    throwErrorAt stx s!"Value restriction: the body of {name} is not a value, so \
-      its type {generalized.pretty} cannot be generalized.  Give {name} a type \
-      annotation that fixes the remaining type variable(s), or make its body a \
-      value (for instance by turning it into a function)."
+    throwErrorAt stx s!"The body of {name} can not be generalized here. Give {name}
+    a type annotation that does not use type variables."
   let scheme := if isVal then generalized else TyScheme.mono t
   -- A type variable the user wrote must come out quantified.  Left un-quantified it would
   -- escape as a fixed-but-unknown type, and the signature would silently mean something
