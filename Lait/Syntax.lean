@@ -92,6 +92,10 @@ end
 
 namespace Exp
 
+-- Where `e` was written.  `.missing` for an expression a surface pass synthesized.
+def stx : Exp n m -> Lean.Syntax
+  | .mk stx _ => stx
+
 def Const {n m : Nat} (c : Const) : Exp n m := .mk .missing (.Const c)
 def Lam {n m : Nat} (x : String) (oty : Option (Ty n)) (e : Exp n (m + 1)) : Exp n m := .mk .missing (.Lam x oty e)
 def Pair {n m : Nat} (e1 e2 : Exp n m) : Exp n m := .mk .missing (.Pair e1 e2)

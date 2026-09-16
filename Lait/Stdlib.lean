@@ -3,6 +3,8 @@ import Lait.Elab
 
 {lait_decl stdlib
 
+  def LAIT_VERSION : String := "1.0"
+
   type List<a> := | Nil | Cons (h : a) (t : List<a>)
 
   type Option<a> := | None | Some (x : a)

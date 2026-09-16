@@ -6,9 +6,11 @@ import Lait.Stdlib
 
 Each block pairs a mistake with the message Lait currently produces.  Two things
 to notice: every mismatch is reported as `Cannot unify X with Y`, with no
-expected/got framing, no offending sub-expression, and the position of the whole
-enclosing expression; and the type on the left of `with` is whichever the checker
-reached first, which is not always the one the user would name first.
+expected/got framing and no offending sub-expression, at the position of the
+whole enclosing expression -- except in a `match`, where the arm that disagrees
+is reported on its own body (see "Where an error lands" at the end of this
+file); and the type on the left of `with` is whichever the checker reached
+first, which is not always the one the user would name first.
 -/
 
 -- ===== Mixing numbers and strings =====
@@ -274,4 +276,100 @@ reached first, which is not always the one the user would name first.
 #guard_msgs in
 {lait_decl teDerefNonRef
   #eval builtin_get(1)
+}
+
+-- ===== Where an error lands =====
+
+/-!
+`#guard_msgs` pins down what a message *says*; it never sees where the message
+was reported.  `#errorRanges` below fills that half in: it elaborates a command
+and logs, for each error, the source text the error covers.
+-/
+
+open Lean Elab Command in
+/-- `#errorRanges <command>`: elaborate `<command>` and log one line per error it
+reports, as `<the source the error covers>  ⇒  <what it says>`.  The errors
+themselves are consumed, so what `#guard_msgs` asserts on is this listing. -/
+elab "#errorRanges " c:command : command => do
+  let saved := (← get).messages
+  modify fun s => { s with messages := {} }
+  try elabCommand c catch e => logError (← e.toMessageData.toString)
+  let produced := (← get).messages
+  modify fun s => { s with messages := saved }
+  let fm ← getFileMap
+  let mut out : Array _root_.String := #[]
+  for m in produced.toList do
+    if m.severity matches .error then
+      let b := fm.ofPosition m.pos
+      let e := fm.ofPosition (m.endPos.getD m.pos)
+      let src := (Substring.Raw.mk fm.source b e).toString
+      out := out.push s!"{src.replace "\n" " "}  ⇒  {← m.data.toString}"
+  logInfo <| "\n".intercalate out.toList
+
+-- A `match` arm whose body has the wrong type is reported on that body, not on
+-- the `match` -- the arm is the only thing distinguishing the two types, so
+-- reporting on the whole expression would leave the reader to find it.
+/--
+info: "green"  ⇒  Cannot unify Int with String
+-/
+#guard_msgs in
+#errorRanges
+{lait_decl teArmRangeCtor
+  type Color := | Red | Green
+  #eval
+    match Red with
+    | Red => 1
+    | Green => "green"
+    end
+}
+
+-- Same for the catch-all arm.
+/--
+info: false  ⇒  Cannot unify Int with Bool
+-/
+#guard_msgs in
+#errorRanges
+{lait_decl teArmRangeWild
+  #include stdlib
+  def f (xs : List<Int>) : Int :=
+    match xs with
+    | Nil => 0
+    | _ => false
+    end
+}
+
+-- A multi-line arm body is covered whole; the report still starts at the arm.
+/--
+info: let y := 3 in       false  ⇒  Cannot unify Int with Bool
+-/
+#guard_msgs in
+#errorRanges
+{lait_decl teArmRangeMultiline
+  type Color := | Red | Green
+  def f (c : Color) : Int :=
+    match c with
+    | Red => 0
+    | Green =>
+      let y := 3 in
+      false
+    end
+}
+
+-- When no single arm is at fault -- every arm agrees, and it is the signature
+-- they disagree with -- there is no arm to blame, and the report falls back to
+-- the enclosing command.  (A `def` with parameters pins its return type through
+-- a synthesized `let` that carries no source span, which is why this lands on
+-- the whole block rather than on the `def`.)
+/--
+info: {lait_decl teArmRangeAllArms   type Color := | Red | Green   def f (c : Color) : Int :=     match c with     | Red => false     | Green => false     end }  ⇒  Cannot unify Bool with Int
+-/
+#guard_msgs in
+#errorRanges
+{lait_decl teArmRangeAllArms
+  type Color := | Red | Green
+  def f (c : Color) : Int :=
+    match c with
+    | Red => false
+    | Green => false
+    end
 }

@@ -684,6 +684,14 @@ def checkBannedLetName (stx : Lean.Syntax) (n : String) : Check m Unit := do
   | "true" | "false" => throwErrorAt stx s!"Cannot redefine {n} here"
   | _ => pure ()
 
+-- Where to report a `match` arm's result-type mismatch.  All the arms and the expected
+-- type are unified against one shared variable, so the arm that fails is the only thing
+-- distinguishing the two types: reporting at the whole `match` would leave the reader to
+-- find it.  An arm a surface pass synthesized has no range of its own, so it still reports
+-- at the `match`.
+def armStx (matchStx : Lean.Syntax) (body : Exp n m) : Lean.Syntax :=
+  if body.stx.getRange?.isSome then body.stx else matchStx
+
 mutual
   -- Infer `e`'s type, recording a hover for it.
   partial def Exp.infer : Exp 0 m → Check m (Ty 0)
@@ -814,7 +822,7 @@ mutual
           throwErrorAt matchStx
             s!"Non-exhaustive match on {tname}: missing constructor(s) {", ".intercalate missing}"
     -- A catch-all makes the match exhaustive; its body binds no variables.
-    | .Wild body => do unify matchStx resTy (← Exp.infer body)
+    | .Wild body => do unify (armStx matchStx body) resTy (← Exp.infer body)
     | .Cons cname xs body rest => do
       match (← read).opMap.get? cname with
       | none => throwErrorAt matchStx s!"Unknown constructor in match: {cname}"
@@ -829,7 +837,7 @@ mutual
           -- index 0, so the argument types go in reversed, putting `argTys[i]` at index `i`.
           let bodyTy ← Exp.inferWithVars argTys.reverse (← Check.locOf matchStx)
             (body'.cast (by simp))
-          unify matchStx resTy bodyTy
+          unify (armStx matchStx body) resTy bodyTy
           Exp.inferCases rest scrutTy resTy matchStx (cname :: seen)
         else
           throwErrorAt matchStx
