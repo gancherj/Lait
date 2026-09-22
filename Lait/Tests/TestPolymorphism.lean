@@ -104,7 +104,7 @@ info: (a -> b) -> (c -> a) -> c -> b
 -- ===== `fun` parameters do NOT generalize =====
 
 -- No rank-2 polymorphism: a parameter cannot be used at two types.
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl polyLambdaIsMonomorphic
   def useTwice := fun f => (f 1, f "s")
@@ -183,7 +183,7 @@ info: (a -> b) -> (c -> a) -> c -> b
 
 -- Calling a `(x : a) (y : a)` function at two types is an error, as the shared
 -- variable demands.
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl polySharedVariable
   def eq2 (x : a) (y : a) : Bool := x == y

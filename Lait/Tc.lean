@@ -398,9 +398,32 @@ def OpSig.instantiate (sig : OpSig) : Check n (List (Ty 0) × Ty 0) := do
 
 -- ---- Unification ----
 
-def cannotUnify (stx : Lean.Syntax) (t1 t2 : TyX 0) : Check n α :=
-  let (s1, s2) := prettyPair t1 t2
-  throwErrorAt stx s!"Cannot unify {s1} with {s2}"
+-- How to phrase a unification failure.  Checking mode knows which of the two types the
+-- context requires and which the expression turned out to have, so it can say so;
+-- `agree` is for the symmetric places -- a `#test`'s two sides, a `match` scrutinee
+-- against a constructor -- where neither side is the expectation and the old wording is
+-- the honest one.
+inductive Why where
+  -- The second type is what the context requires, the first what the expression has.
+  | check
+  | agree
+
+-- Report that two types could not be made equal.  `outer` is the pair `unify` was handed,
+-- once the recursion has gone below it; `v1`/`v2` are where it bottomed out.  Both are
+-- named when they differ: the expression really does have type `List<Int>`, and saying it
+-- has type `Int` because that is where the descent stopped would be a lie.  All four are
+-- named from one `displaySubst`, so a variable shared between them reads the same in each.
+def cannotUnify (stx : Lean.Syntax) (why : Why) (outer : Option (TyX 0 × TyX 0))
+    (v1 v2 : TyX 0) : Check n α := do
+  let (o1, o2) := outer.getD (v1, v2)
+  let m := displaySubst [o1, o2, v1, v2]
+  let pp (t : TyX 0) := TyX.pretty (TyX.substFVars m t)
+  let detail := if outer.isNone then "" else s!": {pp v1} is not {pp v2}"
+  match why with
+  | .check =>
+    throwErrorAt stx
+      s!"This expression has type {pp o1}, but {pp o2} was expected here{detail}"
+  | .agree => throwErrorAt stx s!"Cannot unify {pp o1} with {pp o2}{detail}"
 
 -- Record that the variable `a` is the type `t`.  `t` must already be resolved, so that the
 -- occurs check sees everything.  Both error paths name `a` alongside `t`, so that when it
@@ -416,10 +439,15 @@ def solveVar (stx : Lean.Syntax) (a : Lean.Name) (t : TyX 0) : Check n Unit := d
     throwErrorAt stx s!"Occurs check failed: {as} occurs in {ts}"
   modify fun s => { s with subst := s.subst.insert a t }
 
--- Require `t1` and `t2` to be the same type, reporting at `stx` if they cannot be.
-partial def unify (stx : Lean.Syntax) (t1 t2 : Ty 0) : Check n Unit := do
+-- The worker behind `unify`.  `outer` is the pair the caller asked about, threaded down
+-- so that a failure names it rather than the leaves the descent stops at; `none` while
+-- still at the top, where the two coincide.
+partial def unifyGo (stx : Lean.Syntax) (why : Why) (outer : Option (TyX 0 × TyX 0))
+    (t1 t2 : Ty 0) : Check n Unit := do
   let u1 ← TyX.resolve t1.get
   let u2 ← TyX.resolve t2.get
+  -- Below the top, the pair to report stays the one `unify` was handed.
+  let sub (a b : Ty 0) : Check n Unit := unifyGo stx why (some (outer.getD (u1, u2))) a b
   match u1, u2 with
   | .FVar a, .FVar b =>
     if a == b then pure ()
@@ -436,14 +464,20 @@ partial def unify (stx : Lean.Syntax) (t1 t2 : Ty 0) : Check n Unit := do
       else solveVar stx b (.FVar a)
   | .FVar a, t | t, .FVar a => solveVar stx a t
   | .Arrow a1 b1, .Arrow a2 b2
-  | .Prod a1 b1, .Prod a2 b2 => do unify stx a1 a2; unify stx b1 b2
-  | .Ref a, .Ref b => unify stx a b
+  | .Prod a1 b1, .Prod a2 b2 => do sub a1 a2; sub b1 b2
+  | .Ref a, .Ref b => sub a b
   | .TApp s1 ts1, .TApp s2 ts2 =>
     if s1 == s2 && ts1.length == ts2.length then
-      (ts1.zip ts2).forM fun (a, b) => unify stx a b
-    else cannotUnify stx (.TApp s1 ts1) (.TApp s2 ts2)
+      (ts1.zip ts2).forM fun (a, b) => sub a b
+    else cannotUnify stx why outer (.TApp s1 ts1) (.TApp s2 ts2)
   | .Int, .Int | .Bool, .Bool | .Str, .Str | .Unit, .Unit => pure ()
-  | v1, v2 => cannotUnify stx v1 v2
+  | v1, v2 => cannotUnify stx why outer v1 v2
+
+-- Require `t1` and `t2` to be the same type, reporting at `stx` if they cannot be.  In
+-- checking mode pass `.check`, with `t1` the type the expression has and `t2` the one its
+-- context requires; `why` defaults to `.agree` so the symmetric callers read as before.
+def unify (stx : Lean.Syntax) (t1 t2 : Ty 0) (why : Why := .agree) : Check n Unit :=
+  unifyGo stx why none t1 t2
 
 -- The type variables generalization must leave alone: those free in an in-scope binding's
 -- type, and the rigid ones an enclosing declaration scopes.
@@ -657,8 +691,8 @@ def closeBinding (stx : Lean.Syntax) (name : String) (us envFV : Lean.NameSet)
   -- Unlike at a `let`, a top-level non-value's left-over variables cannot simply stay
   -- free: nothing later could determine them, since each command elaborates alone.
   if topLevel && !isVal && !generalized.tyVars.isEmpty then
-    throwErrorAt stx s!"The body of {name} can not be generalized here. Give {name}
-    a type annotation that does not use type variables."
+    throwErrorAt stx s!"The body of {name} can not be generalized here. Give {name} \
+      a type annotation that does not use type variables."
   let scheme := if isVal then generalized else TyScheme.mono t
   -- A type variable the user wrote must come out quantified.  Left un-quantified it would
   -- escape as a fixed-but-unknown type, and the signature would silently mean something
@@ -684,19 +718,90 @@ def checkBannedLetName (stx : Lean.Syntax) (n : String) : Check m Unit := do
   | "true" | "false" => throwErrorAt stx s!"Cannot redefine {n} here"
   | _ => pure ()
 
--- Where to report a `match` arm's result-type mismatch.  All the arms and the expected
--- type are unified against one shared variable, so the arm that fails is the only thing
--- distinguishing the two types: reporting at the whole `match` would leave the reader to
--- find it.  An arm a surface pass synthesized has no range of its own, so it still reports
--- at the `match`.
-def armStx (matchStx : Lean.Syntax) (body : Exp n m) : Lean.Syntax :=
-  if body.stx.getRange?.isSome then body.stx else matchStx
+-- ---- Checking against an expected type ----
+--
+-- `Exp.infer` takes the type the context requires, when it has one: `none` asks what the
+-- expression is, `some t` says what it must be.  That is what lets a mismatch be reported
+-- where it happens.  It changes no program's meaning -- this is Hindley-Milner, and the
+-- same equations get solved either way -- only where the reader is pointed when they do
+-- not have a solution.
+--
+-- Every case of `ExpX.infer` must return a type already unified with `exp`: either by
+-- ending in `unifyReturn`, or by returning one built out of `exp` itself.
+
+-- Where to report a mismatch about an expression: its own range, or -- when a surface
+-- pass synthesized the expression and gave it none -- the innermost enclosing expression
+-- that has one.  `Surface.elabDefMutual` lowers every `def` with parameters to a
+-- position-less `Rec`/`Lam`/`Let` chain, and `mkGetters` and `Exp.nthProj` build
+-- position-less nodes too; without this their errors would land on the whole command.
+def reportAt (stx : Lean.Syntax) : Check n Lean.Syntax := do
+  if stx.getRange?.isSome then pure stx else pure (← read).curSyntax
+
+-- Require `t` to be what the context expects, and hand back the type to report for the
+-- expression.  `t` goes first: it is what the expression has, `exp` what was wanted.
+def unifyReturn (stx : Lean.Syntax) (exp : Option (Ty 0)) (t : Ty 0) :  Check m (Ty 0) :=
+  match exp with
+  | none => pure t
+  | some t' => do
+      unify (← reportAt stx) t t' .check
+      pure t'
+
+-- The type the context requires, or a fresh placeholder when it requires nothing.
+def expOr (stx : Lean.Syntax) : Option (Ty 0) → Check n (Ty 0)
+  | some t => pure t
+  | none => freshTy stx
+
+-- The parts `exp` demands of a compound type.  When `exp` already has that shape they are
+-- its own parts, so the expectation reaches the sub-expressions; otherwise they are fresh
+-- and `exp` is made to be that shape, which is where `fun x => x` checked against `Int`
+-- is rejected -- at the `fun`, before its body is looked at.
+def expectArrow (stx : Lean.Syntax) (exp : Option (Ty 0)) : Check n (Ty 0 × Ty 0) := do
+  match exp with
+  | none => do pure (← freshTy stx, ← freshTy stx)
+  | some t =>
+    match ← TyX.resolve t.get with
+    | .Arrow a b => pure (a, b)
+    | _ =>
+      let a ← freshTy stx
+      let b ← freshTy stx
+      unify (← reportAt stx) (.mk stx (.Arrow a b)) t .check
+      pure (a, b)
+
+def expectProd (stx : Lean.Syntax) (exp : Option (Ty 0)) : Check n (Ty 0 × Ty 0) := do
+  match exp with
+  | none => do pure (← freshTy stx, ← freshTy stx)
+  | some t =>
+    match ← TyX.resolve t.get with
+    | .Prod a b => pure (a, b)
+    | _ =>
+      let a ← freshTy stx
+      let b ← freshTy stx
+      unify (← reportAt stx) (.mk stx (.Prod a b)) t .check
+      pure (a, b)
+
+def expectRef (stx : Lean.Syntax) (exp : Option (Ty 0)) : Check n (Ty 0) := do
+  match exp with
+  | none => freshTy stx
+  | some t =>
+    match ← TyX.resolve t.get with
+    | .Ref a => pure a
+    | _ =>
+      let a ← freshTy stx
+      unify (← reportAt stx) (.mk stx (.Ref a)) t .check
+      pure a
 
 mutual
   -- Infer `e`'s type, recording a hover for it.
-  partial def Exp.infer : Exp 0 m → Check m (Ty 0)
+  partial def Exp.infer (exp : Option (Ty 0)) : Exp 0 m → Check m (Ty 0)
     | .mk stx x => do
-      let ty ← ExpX.infer stx x
+      -- Become the fallback report position for everything below, so a synthesized
+      -- sub-expression is blamed on the nearest thing the reader actually wrote.  The
+      -- hover below still uses `stx` itself: a position-less node is not hoverable, and
+      -- borrowing the parent's range here would attach its type to the parent.
+      let go := ExpX.infer stx exp x
+      let ty ← if stx.getRange?.isSome then
+          withReader (fun env => { env with curSyntax := stx }) go
+        else go
       -- A variable occurrence points at its binding; anything else has no target.
       let loc? ← match x with
         | .Var i => pure ((← read).vars.get i).loc?
@@ -704,24 +809,36 @@ mutual
       modify fun s => { s with stxMap := (stx, ty, loc?) :: s.stxMap }
       pure ty
 
-  partial def ExpX.infer (stx : Lean.Syntax) : ExpX 0 m → Check m (Ty 0)
-    | .Const (.Num _) => pure (.mk stx .Int)
-    | .Const (.Bool _) => pure (.mk stx .Bool)
-    | .Const (.String _) => pure (.mk stx .Str)
-    | .Const .Unit => pure (.mk stx .Unit)
-    | .Var i => do ((← read).vars.get i).scheme.instantiate
+  partial def ExpX.infer (stx : Lean.Syntax) (exp : Option (Ty 0)) : ExpX 0 m → Check m (Ty 0)
+    | .Const (.Num _) => unifyReturn stx exp (.mk stx .Int)
+    | .Const (.Bool _) => unifyReturn stx exp (.mk stx .Bool)
+    | .Const (.String _) => unifyReturn stx exp (.mk stx .Str)
+    | .Const .Unit => unifyReturn stx exp (.mk stx .Unit)
+    | .Var i => do
+      let t <- ((← read).vars.get i).scheme.instantiate
+      unifyReturn stx exp t
     | .Lam _ oty e => do
+      -- What the context wants of the parameter and of the result.  An annotation must
+      -- agree with the former; the latter is what the body is checked against.
+      let (expArg, expRes) ← expectArrow stx exp
       let argTy ← match oty with
-        | none => freshTy stx
-        | some t => normalizeTy t
-      let bodyTy ← withVar (TyScheme.mono argTy) (← Check.locOf stx) (Exp.infer e)
+        | none => pure expArg
+        | some t => do
+          let t ← normalizeTy t
+          unify (← reportAt stx) t expArg .check
+          pure t
+      let bodyTy ← withVar (TyScheme.mono argTy) (← Check.locOf stx) (Exp.infer (some expRes) e)
+      -- `expectArrow` has already unified with `exp`.  Returning the annotation's own
+      -- `Ty` rather than `exp` keeps what the user wrote in the hover.
       pure (.mk stx (.Arrow argTy bodyTy))
     | .App e1 e2 => do
-      let t1 ← Exp.infer e1
-      let t2 ← Exp.infer e2
+      -- The result the context wants, so the function is checked against a full arrow and
+      -- a bad argument is reported on the argument.
       let r ← freshTy stx
-      unify stx t1 (.mk stx (.Arrow t2 r))
-      pure r
+      let res ← expOr stx exp
+      let _ ← Exp.infer (some (.mk stx (.Arrow r res))) e1
+      let _ ← Exp.infer (some r) e2
+      pure res
     | .Let n oty e1 e2 => do
       checkBannedLetName stx n
       -- A `let` is a declaration, so `e1` is generalized right here.  The type variables
@@ -730,81 +847,100 @@ mutual
       let outerUs := (← read).tyVarScope
       let us := (Exp.letTyVars n oty e1).filter (fun nm => !outerUs.contains nm)
       let t1 ← withTyVarScope us do
-        let t1 ← Exp.infer e1
-        if let some t := oty then unify stx t1 (← normalizeTy t)
+        -- The annotation is what `e1` is checked against, rather than something unified
+        -- with its type afterwards, so a disagreement is reported inside `e1`.  This is
+        -- also how a `def`'s return type reaches its body: `Surface.elabDefMutual` pins
+        -- it with a synthetic `let`.
+        let t1 ← Exp.infer (← oty.mapM normalizeTy) e1
         -- Closing over `t1` means knowing it.
         Ty.resolve t1
       -- Read outside `withTyVarScope`: the closure is taken in the context this
       -- declaration extends, and `us` is what it quantifies.
       let envFV ← envFVars
       let scheme ← closeBinding stx n us envFV (Exp.isValue (← read).valueCtx e1) t1
-      withVar scheme (← Check.locOf stx) (Exp.infer e2)
+      withVar scheme (← Check.locOf stx) (Exp.infer exp e2)
     | .If e1 e2 e3 => do
-      let t1 ← Exp.infer e1
-      let t2 ← Exp.infer e2
-      let t3 ← Exp.infer e3
-      unify stx t1 (.mk stx .Bool)
-      unify stx t2 t3
+      let _ ← Exp.infer (some (.mk stx .Bool)) e1
+      let t2 ← Exp.infer exp e2
+      -- The `else` branch is checked against the `then` branch, so branches that
+      -- disagree are reported on the second one rather than on the whole `if`.
+      let _ ← Exp.infer (some t2) e3
       pure t2
-    | .Pair e1 e2 => do pure (.mk stx (.Prod (← Exp.infer e1) (← Exp.infer e2)))
-    | .Fst e => do pure (← Exp.inferPair stx e).1
-    | .Snd e => do pure (← Exp.inferPair stx e).2
-    | .Alloc e => do pure (.mk stx (.Ref (← Exp.infer e)))
+    | .Pair e1 e2 => do
+      let (expA, expB) ← expectProd stx exp
+      let t1 ← Exp.infer (some expA) e1
+      let t2 ← Exp.infer (some expB) e2
+      pure (.mk stx (.Prod t1 t2))
+    | .Fst e => do pure (← Exp.inferPair stx exp none e).1
+    | .Snd e => do pure (← Exp.inferPair stx none exp e).2
+    | .Alloc e => do
+      let t ← expectRef stx exp
+      let _ ← Exp.infer (some t) e
+      pure (.mk stx (.Ref t))
     | .Error e => do
-      Exp.inferAgainst stx e (.mk stx .Str)
-      freshTy stx
+      let _ ← Exp.infer (some (.mk stx .Str)) e
+      -- `error` never returns, so it has whatever type is wanted of it.
+      expOr stx exp
     | .Print e => do
-      Exp.inferAgainst stx e (.mk stx .Str)
-      pure (.mk stx .Unit)
+      let _ ← Exp.infer (some (.mk stx .Str)) e
+      unifyReturn stx exp (.mk stx .Unit)
     | .Rec _ e1 => do
-      let r ← freshTy stx
-      let res ← withVar (TyScheme.mono r) (← Check.locOf stx) (Exp.infer e1)
-      unify stx r res
-      pure res
+      -- The recursive variable's type is the whole `rec`'s type, so an expectation makes
+      -- recursive calls check against the real signature instead of against a
+      -- placeholder only pinned down once the body is done.
+      let r ← expOr stx exp
+      let _ ← withVar (TyScheme.mono r) (← Check.locOf stx) (Exp.infer (some r) e1)
+      pure r
     | .Deref e => do
-      let t ← Exp.infer e
-      let a ← freshTy stx
-      unify stx t (.mk stx (.Ref a))
+      let a ← expOr stx exp
+      let _ ← Exp.infer (some (.mk stx (.Ref a))) e
       pure a
     | .Assign e1 e2 => do
-      let t1 ← Exp.infer e1
-      let t2 ← Exp.infer e2
-      unify stx t1 (.mk stx (.Ref t2))
-      pure (.mk stx .Unit)
+      -- Source order, and the cell's content type reaches the stored expression, so
+      -- `builtin_set(r, e)` with the wrong `e` is reported on `e` rather than as one
+      -- `Ref<..>` against another on the whole call.
+      let a ← freshTy stx
+      let _ ← Exp.infer (some (.mk stx (.Ref a))) e1
+      let _ ← Exp.infer (some a) e2
+      unifyReturn stx exp (.mk stx .Unit)
     | .Try e1 e2 => do
-      let t1 ← Exp.infer e1
-      let t2 ← Exp.infer e2
-      unify stx t1 t2
+      let t1 ← Exp.infer exp e1
+      let _ ← Exp.infer (some t1) e2
       pure t1
     | .Op s es => do
       match (← read).opMap.get? s with
-      | none => throwErrorAt stx s!"Unknown operator/constructor: {s}"
+      | none => throwErrorAt (← reportAt stx) s!"Unknown operator/constructor: {s}"
       | some sig => do
         let (argTys, outTy) ← sig.instantiate
         let argEs := es.toList
         if argEs.length ≠ argTys.length then
-          throwErrorAt stx
+          throwErrorAt (← reportAt stx)
             s!"Operator {s} expects {argTys.length} arguments but got {argEs.length}"
+        -- The result is unified before the arguments are checked, so what the context
+        -- wants reaches them through the signature's shared variables: `Cons 1 xs` in a
+        -- `List<String>` position is reported on the `1`.  After the arity check, which
+        -- must still be what a mis-applied operator reports.
+        let outTy ← unifyReturn stx exp outTy
         for (a, t) in argEs.zip argTys do
-          Exp.inferAgainst stx a t
+          let _ ← Exp.infer (some t) a
         pure outTy
     | .Match e cases => do
-      let scrutTy ← Exp.infer e
-      let resTy ← freshTy stx
+      -- The scrutinee stays in inference mode: its type is only known once an arm names
+      -- a constructor, and blaming it for a *later* arm's wrong constructor would read
+      -- worse than reporting that arm.
+      let scrutTy ← Exp.infer none e
+      let resTy ← expOr stx exp
       Exp.inferCases cases scrutTy resTy stx []
       pure resTy
     | .Loc _ => throwError "Loc should not appear in source"
 
-  -- Infer `e`'s type and require it to be `ty`.
-  partial def Exp.inferAgainst (stx : Lean.Syntax) (e : Exp 0 m) (ty : Ty 0) : Check m Unit := do
-    unify stx (← Exp.infer e) ty
-
-  -- The component types of `e`, which must be a pair.
-  partial def Exp.inferPair (stx : Lean.Syntax) (e : Exp 0 m) : Check m (Ty 0 × Ty 0) := do
-    let t ← Exp.infer e
-    let a ← freshTy stx
-    let b ← freshTy stx
-    unify stx t (.mk stx (.Prod a b))
+  -- The component types of `e`, which must be a pair.  `exp1`/`exp2` are what the context
+  -- requires of each component, where it requires anything.
+  partial def Exp.inferPair (stx : Lean.Syntax) (exp1 exp2 : Option (Ty 0)) (e : Exp 0 m) :
+      Check m (Ty 0 × Ty 0) := do
+    let a ← expOr stx exp1
+    let b ← expOr stx exp2
+    let _ ← Exp.infer (some (.mk stx (.Prod a b))) e
     pure (a, b)
 
   -- `seen` accumulates the constructor names already matched (in reverse), used to reject
@@ -822,7 +958,7 @@ mutual
           throwErrorAt matchStx
             s!"Non-exhaustive match on {tname}: missing constructor(s) {", ".intercalate missing}"
     -- A catch-all makes the match exhaustive; its body binds no variables.
-    | .Wild body => do unify (armStx matchStx body) resTy (← Exp.infer body)
+    | .Wild body => do let _ ← Exp.infer (some resTy) body
     | .Cons cname xs body rest => do
       match (← read).opMap.get? cname with
       | none => throwErrorAt matchStx s!"Unknown constructor in match: {cname}"
@@ -835,23 +971,25 @@ mutual
           let body' : Exp 0 (m + argTys.length) := body.cast (by rw [h])
           -- Pattern variables are indexed with the first at index 0.  `withVar` pushes to
           -- index 0, so the argument types go in reversed, putting `argTys[i]` at index `i`.
-          let bodyTy ← Exp.inferWithVars argTys.reverse (← Check.locOf matchStx)
+          let _ ← Exp.inferWithVars (some resTy) argTys.reverse (← Check.locOf matchStx)
             (body'.cast (by simp))
-          unify (armStx matchStx body) resTy bodyTy
           Exp.inferCases rest scrutTy resTy matchStx (cname :: seen)
         else
           throwErrorAt matchStx
             s!"Constructor {cname} expects {argTys.length} arguments but pattern has {xs.length}"
 
-  -- Bind each type in `argTys` monomorphically, then infer `body`.
-  partial def Exp.inferWithVars {m : Nat} :
+  -- Bind each type in `argTys` monomorphically, then check `body` against `exp`.  `exp`
+  -- sits before the colon: what makes the casts below go through is that `argTys` is
+  -- bound in the telescope and `body`'s type mentions its length.
+  partial def Exp.inferWithVars {m : Nat} (exp : Option (Ty 0)) :
       (argTys : List (Ty 0)) → Option DeclarationLocation → Exp 0 (m + argTys.length) →
       Check m (Ty 0)
-    | [], _, body => Exp.infer (body.cast (by simp))
+    | [], _, body => Exp.infer exp (body.cast (by simp))
     | t :: ts, loc?, body =>
         withVar (TyScheme.mono t) loc? <|
-          Exp.inferWithVars (m := m + 1) ts loc? (body.cast (by simp; omega))
+          Exp.inferWithVars (m := m + 1) exp ts loc? (body.cast (by simp; omega))
 end
+
 
 -- ---- Declaration checking ----
 
@@ -899,10 +1037,16 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
     -- What this declaration declares, plus what is implicitly scoped at it: written in an
     -- annotation inside the body that no inner `let` scopes first.
     let us := declared.foldl (·.insert ·) ((annFVars oty').union (Exp.unguardedTyVars e'))
-    let inferredTy ← withHovers <| withTyVarScope us do
-      let inferredTy ← Exp.infer e'
-      if let some t := oty' then unify dstx inferredTy (← normalizeTy t)
-      pure inferredTy
+    -- The body is checked against the signature rather than unified with it afterwards.
+    -- This only bites for a `def` with no parameters: one *with* parameters is lowered by
+    -- `Surface.elabDefMutual` to a position-less `Rec`/`Lam` chain declared with no type
+    -- of its own, and its return type arrives through the synthetic `let` that pins it.
+    -- Naming the declaration as the fallback report position is what keeps errors in that
+    -- chain off the whole command.
+    let inferredTy ← withHovers <| withTyVarScope us <|
+      withReader (fun env =>
+        if dstx.getRange?.isSome then { env with curSyntax := dstx } else env) do
+      Exp.infer (← oty'.mapM normalizeTy) e'
     let finalTy ← Ty.resolve inferredTy
     -- Read outside `withTyVarScope`: the closure quantifies `us`, so the context excludes it.
     let envFV ← envFVars
@@ -913,19 +1057,22 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
     withDefName dstx name scheme k
   | _, _, .mk _ (.DeclEval e), k
   | _, _, .mk _ (.DeclTestError e _), k => do
-    let _ ← checkAnonDecl (Exp.unguardedTyVars e) (Exp.infer e)
+    let _ ← checkAnonDecl (Exp.unguardedTyVars e) (Exp.infer none e)
     finishDecl
     k
   | _, _, .mk dstx (.DeclTest e1 e2), k => do
     let us := (Exp.unguardedTyVars e1).union (Exp.unguardedTyVars e2)
     let _ ← checkAnonDecl us do
-      let t1 ← Exp.infer e1
-      let t2 ← Exp.infer e2
+      -- The two sides of a `#test` are symmetric -- neither is the expectation -- so this
+      -- stays a plain `unify` at the declaration rather than checking one against the
+      -- other.
+      let t1 ← Exp.infer none e1
+      let t2 ← Exp.infer none e2
       unify dstx t1 t2
     finishDecl
     k
   | _, _, .mk stx (.DeclCheck e), k => do
-    let res ← checkAnonDecl (Exp.unguardedTyVars e) (Exp.infer e)
+    let res ← checkAnonDecl (Exp.unguardedTyVars e) (Exp.infer none e)
     -- `#check` binds nothing, so an un-generalizable type is not an error here.
     let scheme := Ty.generalize (← envFVars) (← Ty.resolve res)
     logInfoAt stx scheme.pretty

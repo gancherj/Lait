@@ -44,7 +44,7 @@ the substring.
   #test_error checked (- 1) ~ "negative: -1"
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type Int, but String was expected here -/
 #guard_msgs in
 {lait_decl errNeedsString
   #eval error 42
@@ -81,7 +81,7 @@ the substring.
   #test (try boom 10 with - 1 end) === - 1
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl errTryBranchTypes
   #eval try 1 with "s" end
@@ -183,7 +183,7 @@ the substring.
 -- CURRENT BEHAVIOR: a type error stops the whole `{lait_decl ...}` block, so
 -- later declarations are never checked and only one error is reported.
 -- REPORT.md P11.
-/-- error: Cannot unify String with Int -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl errStopsAtFirst
   def bad := 1 + "s"

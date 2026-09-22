@@ -124,7 +124,7 @@ Everything at 45-62 is left-associative except `::`, which is right.  The
   def _ := print "TestSyntaxCorners: print works"
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type Int, but String was expected here -/
 #guard_msgs in
 {lait_decl synInternalPrintNeedsString
   #eval internal_print 1
