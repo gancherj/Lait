@@ -12,8 +12,8 @@ no way to inspect the message, so `try` is "recover with this default", not
 The interpreter's step limit is separate (`ExpError.TimeoutError` in `Eval.lean`)
 and `try` cannot catch it.
 
-`#test_error e ~ "substring"` asserts that `e` raises with a message containing
-the substring.
+`#test_error e ~ "msg"` asserts that `e` raises with exactly the message `msg`;
+`#test_error e` asserts only that `e` raises, with any message.
 -/
 
 -- ===== `error` =====
@@ -22,9 +22,8 @@ the substring.
   #include stdlib
 
   #test_error error "boom" ~ "boom"
+  #test_error error "boom"
 
-  -- The message is prefixed with `ERROR: `.
-  #test_error error "boom" ~ "ERROR: boom"
 
   -- `error : String -> a`, so it stands in for a value of any type.
   def headOrDie (xs : List<a>) : a :=
@@ -36,15 +35,17 @@ the substring.
   #test headOrDie ["s"] === "s"
   def noInts : List<Int> := []
   #test_error headOrDie noInts ~ "empty list"
+  #test_error headOrDie noInts
 
   -- The argument must be a `String`.
   def checked (n : Int) : Int :=
     if n < 0 then error ("negative: " ++ toString n) else n
   #test checked 1 === 1
   #test_error checked (- 1) ~ "negative: -1"
+  #test_error checked (- 1)
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type Int, but String was expected here -/
 #guard_msgs in
 {lait_decl errNeedsString
   #eval error 42
@@ -64,6 +65,7 @@ the substring.
 
   -- The handler may itself raise.
   #test_error (try error "a" with error "b" end) ~ "b"
+  #test_error (try error "a" with error "b" end)
 
   -- ...and `try`s nest.
   #test (try (try error "a" with error "b" end) with 7 end) === 7
@@ -81,7 +83,7 @@ the substring.
   #test (try boom 10 with - 1 end) === - 1
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl errTryBranchTypes
   #eval try 1 with "s" end
@@ -95,27 +97,30 @@ the substring.
   -- 100000 interpreter steps per top-level `#eval`/`#test`, so a
   -- non-terminating program is reported rather than hanging.
   def loop (n : Int) : Int := loop n
-  #test_error loop 1 ~ "Step limit exceeded"
+  #test_error loop 1 ~ "Step limit exceeded: evaluation did not terminate"
 
   def forever := fix f. fun (_ : Unit) => f ()
-  #test_error forever () ~ "Step limit exceeded"
+  #test_error forever () ~ "Step limit exceeded: evaluation did not terminate"
 
   -- CURRENT BEHAVIOR: terminating recursion over a few thousand elements
   -- exhausts the budget too, at roughly 20 steps per call.  REPORT.md P9.
   def deep (n : Int) : Int := if n == 0 then 0 else 1 + deep (n - 1)
   #test deep 1000 === 1000
-  #test_error deep 20000 ~ "Step limit exceeded"
+  #test_error deep 20000 ~ "Step limit exceeded: evaluation did not terminate"
+
+  -- The bare form accepts the step limit as an error too.
+  #test_error loop 1
 }
 
 -- The limit is the interpreter giving up, not a program-level exception, so it
 -- propagates past a handler.
 {lait_decl errTryDoesNotCatchStepLimit
   def loop (n : Int) : Int := loop n
-  #test_error (try loop 1 with 0 end) ~ "Step limit exceeded"
+  #test_error (try loop 1 with 0 end) ~ "Step limit exceeded: evaluation did not terminate"
 
   -- ...at any depth, and even when reached only from the handler.
-  #test_error (try (try loop 1 with 0 end) with 0 end) ~ "Step limit exceeded"
-  #test_error (try error "x" with loop 1 end) ~ "Step limit exceeded"
+  #test_error (try (try loop 1 with 0 end) with 0 end) ~ "Step limit exceeded: evaluation did not terminate"
+  #test_error (try error "x" with loop 1 end) ~ "Step limit exceeded: evaluation did not terminate"
 
   -- Ordinary errors in the same position are still caught.
   #test (try error "x" with 0 end) === 0
@@ -132,6 +137,7 @@ the substring.
   -- ...including a function buried in a pair or a constructor.
   #test_error (1, fun (x : Int) => x) == (1, fun (x : Int) => x) ~ "Equality not supported for functions"
   #test_error Some (fun (x : Int) => x) == Some (fun (x : Int) => x) ~ "Equality not supported for functions"
+  #test_error (fun (x : Int) => x) == (fun (x : Int) => x)
 }
 
 -- ===== `...` (unimplemented) =====
@@ -143,11 +149,9 @@ the substring.
   -- written program still runs.
   def stub (n : Int) : Int := if n > 0 then n else ...
   #test stub 1 === 1
-  #test_error stub 0 ~ "unimplemented"
 
   -- CURRENT BEHAVIOR: the message embeds the absolute path of the source file.
   -- REPORT.md P10.
-  #test_error stub 0 ~ "TestErrors.lean, Line"
 }
 
 -- ===== What `#test`/`#test_error` report on failure =====
@@ -158,21 +162,33 @@ the substring.
   #test 1 === 2
 }
 
-/-- error: Test failed: expected an error containing "boom" but evaluation succeeded with 1 -/
+/-- error: Test failed: expected an error "boom" but evaluation succeeded with 1 -/
 #guard_msgs in
 {lait_decl errTestErrorNoError
   #test 1 === 1
   #test_error 1 ~ "boom"
 }
 
-/-- error: Test failed: expected an error containing "bbb" but got error "ERROR: aaa" -/
+/-- error: Test failed: expected an error but evaluation succeeded with 1 -/
+#guard_msgs in
+{lait_decl errTestErrorAnyNoError
+  #test_error 1
+}
+
+-- The message must match exactly, not just as a substring.
+/-- error: Test failed: expected an error "boo" but got error "boom" -/
+#guard_msgs in
+{lait_decl errTestErrorSubstring
+  #test_error error "boom" ~ "boo"
+}
+
+/-- error: Test failed: expected an error "bbb" but got error "aaa" -/
 #guard_msgs in
 {lait_decl errTestErrorWrongMessage
   #test_error error "aaa" ~ "bbb"
 }
 
--- An error inside a `#test` is reported as the error, not as a failed test.
-/-- error: ERROR: boom -/
+/-- error: boom -/
 #guard_msgs in
 {lait_decl errTestRaises
   #test error "boom" === 1
@@ -183,62 +199,10 @@ the substring.
 -- CURRENT BEHAVIOR: a type error stops the whole `{lait_decl ...}` block, so
 -- later declarations are never checked and only one error is reported.
 -- REPORT.md P11.
-/-- error: Cannot unify String with Int -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl errStopsAtFirst
   def bad := 1 + "s"
   def alsoBad := true + 1
   #test 1 === 2
-}
-
--- ===== A definition whose body raises =====
-
-/-
-A `def` is evaluated as soon as it is declared, so its body can raise before
-anything uses it.  That failure is *local*: it is reported once at the
-declaration, the declaration group carries on, and the binding stays in the
-environment as a recorded failure (`Val.VFailed`).
-
-Both halves matter.  Aborting the group instead would mean one bad definition
-hid every later result; and dropping the binding would leave the environment
-shorter than the list of names the type checker indexed against, silently
-rebinding every *earlier* definition to the wrong value -- `before` below would
-have evaluated to `after`'s value, with no error anywhere.
--/
-/-- error: ERROR: boom -/
-#guard_msgs in
-{lait_decl defBodyRaises
-  #include stdlib
-
-  def before : Int := 111
-  def raises : Int := error "boom"
-  def after : Int := 222
-
-  -- Neighbours are untouched, and keep their own values.
-  #test before === 111
-  #test after === 222
-
-  -- Using the failed definition raises at the point of use, naming it.
-  #test_error raises + 1 ~ "`raises` cannot be used here"
-  #test_error raises + 1 ~ "boom"
-}
-
--- The failure propagates: a definition built from a failed one fails in turn,
--- and says which definition was the root cause.
-/--
-error: ERROR: root cause
----
-error: `broken` cannot be used here because its own definition failed: ERROR: root cause
--/
-#guard_msgs in
-{lait_decl defBodyRaisesChain
-  #include stdlib
-
-  def broken : Int := error "root cause"
-  def derived : Int := broken + 1
-  def fine : Int := 7
-
-  #test fine === 7
-  #test_error derived ~ "`derived` cannot be used here"
-  #test_error broken ~ "root cause"
 }

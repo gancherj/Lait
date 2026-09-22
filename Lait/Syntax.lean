@@ -60,7 +60,8 @@ inductive ExpX : Nat -> Nat -> Type where
   | Let : String -> Option (Ty n) -> Exp n m -> Exp n (m + 1) -> ExpX n m
   | If : Exp n m -> Exp n m -> Exp n m -> ExpX n m
   | Pair : Exp n m -> Exp n m -> ExpX n m
-  | Rec : String -> Exp n (m + 1) -> ExpX n m
+  -- The optional type is that of the whole `rec`, when a surface pass knows all of it.
+  | Rec : String -> Option (Ty n) -> Exp n (m + 1) -> ExpX n m
   | Var : Fin m -> ExpX n m
   | Error : Exp n m -> ExpX n m
   | Print : Exp n m -> ExpX n m
@@ -172,7 +173,7 @@ mutual
     | .mk stx (.Try e1 e2) => .mk stx (.Try (Exp.rename σ σ' e1) (Exp.rename σ σ' e2))
     | .mk stx (.Loc i) => .mk stx (.Loc i)
     | .mk stx (.Match e cases) => .mk stx (.Match (Exp.rename σ σ' e) (ExpMatchCases.rename σ σ' cases))
-    | .mk stx (.Rec x e) => .mk stx (.Rec x (Exp.rename σ (up_ren σ') e))
+    | .mk stx (.Rec x oty e) => .mk stx (.Rec x (oty.map (·.rename σ)) (Exp.rename σ (up_ren σ') e))
 
   def ExpList.rename (σ : Fin n -> Fin n') (σ' : Fin m -> Fin m')
     (expList : ExpList n m) : ExpList n' m' :=
@@ -230,7 +231,7 @@ def ExpX.substTy (σ : Fin n -> Ty n') : ExpX n m -> ExpX n' m
   | .Let x oty e1 e2 => .Let x (oty.map (Ty.subst σ)) (Exp.substTy σ e1) (Exp.substTy σ e2)
   | .If e1 e2 e3 => .If (Exp.substTy σ e1) (Exp.substTy σ e2) (Exp.substTy σ e3)
   | .Pair e1 e2 => .Pair (Exp.substTy σ e1) (Exp.substTy σ e2)
-  | .Rec x e => .Rec x (Exp.substTy σ e)
+  | .Rec x oty e => .Rec x (oty.map (Ty.subst σ)) (Exp.substTy σ e)
   | .Var i => .Var i
   | .Error e => .Error (Exp.substTy σ e)
   | .Print e => .Print (Exp.substTy σ e)
@@ -267,7 +268,7 @@ inductive DeclX : Nat -> Nat -> Type where
   | DeclTypeAlias : String -> TyScheme -> DeclX n n
   | DeclEval : Exp 0 n -> DeclX n n
   | DeclTest : Exp 0 n -> Exp 0 n -> DeclX n n
-  | DeclTestError : Exp 0 n -> String -> DeclX n n
+  | DeclTestError : Exp 0 n -> Option String -> DeclX n n
   | DeclCheck : Exp 0 n -> DeclX n n
   | DeclInductive : String ->  (tvars : List String) ->
     List (String × List (String × Ty tvars.length)) ->

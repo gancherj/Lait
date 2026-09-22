@@ -64,14 +64,14 @@ closure.
 
 -- What the context fixes is not generalized: `g` is `x`, whose type the parameter
 -- already pinned down.
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl lpContextFixed
   def f x := let g := x in (g 1, g "s")
 }
 
 -- Same when the connection runs through a constraint rather than the type itself.
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl lpContextFixedIndirect
   def f x := let g := fun y => x y in (g 1, g "s")
@@ -93,7 +93,7 @@ closure.
 }
 
 -- ... so the cell cannot be used at two element types.
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl lpRefNotPolymorphic
   #include stdlib
@@ -104,7 +104,7 @@ closure.
 }
 
 -- A call is expansive, even when it returns a fresh cell.
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl lpCallIsExpansive
   #include stdlib
@@ -132,7 +132,7 @@ closure.
 }
 
 -- A constructor applied to an allocation is expansive as well.
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl lpCtorOfAlloc
   #include stdlib
@@ -200,7 +200,7 @@ error: Cannot make the type variables b and a equal: each is chosen separately b
 }
 
 -- An annotated `let` fixes the type, and then it really is fixed.
-/-- error: Cannot unify String with Int -/
+/-- error: This expression has type List<Int>, but List<String> was expected here: Int is not String -/
 #guard_msgs in
 {lait_decl lpAnnotatedLet
   #include stdlib

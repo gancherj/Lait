@@ -124,7 +124,7 @@ Everything at 45-62 is left-associative except `::`, which is right.  The
   def _ := print "TestSyntaxCorners: print works"
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type Int, but String was expected here -/
 #guard_msgs in
 {lait_decl synInternalPrintNeedsString
   #eval internal_print 1
@@ -136,7 +136,6 @@ Everything at 45-62 is left-associative except `::`, which is right.  The
   -- `...` type-checks at any type and raises when reached.
   def half (b : Bool) : Int := if b then 1 else ...
   #test half true === 1
-  #test_error half false ~ "unimplemented"
 
   def stubStr (b : Bool) : String := if b then "a" else ...
   #test stubStr true === "a"

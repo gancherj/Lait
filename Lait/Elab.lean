@@ -448,7 +448,7 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
     mkSurfaceExp e.raw (.Snd (← elabLaitExp e1))
   | `(lait_exp | fix $id:lait_ident . $e1:lait_exp) => do
     let name ← elabLaitIdent id
-    mkSurfaceExp e.raw (.Rec name (← elabLaitExp e1))
+    mkSurfaceExp e.raw (.Rec name none (← elabLaitExp e1))
   | `(lait_exp | match $e1:lait_exp with $arms:lait_match_arm* end) => do
       let scrut ← elabLaitExp e1
       let args <- arms.mapM elabLaitMatchArm
@@ -571,8 +571,9 @@ syntax "#test" lait_exp "===" lait_exp : lait_decl
 /--
 Evaluate an expression and succeed if the given expression fails.
 The syntax is `#test_error e ~ s`, where `e` is our given expression, and `s` is the expected string output by `error`.
+Writing just `#test_error e` succeeds if `e` fails with any error.
 -/
-syntax "#test_error" lait_exp "~" str : lait_decl
+syntax "#test_error" lait_exp ("~" str)? : lait_decl
 /--
 Check and expression to see its type.
 The syntax is `#check e`.
@@ -683,9 +684,9 @@ partial def elabLaitDecl (st : IO.Ref IncludeState) (d : Lean.TSyntax `lait_decl
     let e ← elabLaitExp e
     let e2 ← elabLaitExp e2
     mkSurfaceDeclEntry d.raw (.DeclTest e e2)
-  | `(lait_decl | #test_error $e:lait_exp ~ $s:str) => do
+  | `(lait_decl | #test_error $e:lait_exp $[~ $s:str]?) => do
     let e ← elabLaitExp e
-    mkSurfaceDeclEntry d.raw (.DeclTestError e s.getString)
+    mkSurfaceDeclEntry d.raw (.DeclTestError e (s.map (·.getString)))
   | `(lait_decl | #check $e:lait_exp) => do
     let e ← elabLaitExp e
     mkSurfaceDeclEntry d.raw (.DeclCheck e)

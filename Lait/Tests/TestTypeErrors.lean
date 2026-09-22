@@ -4,24 +4,30 @@ import Lait.Stdlib
 /-!
 # The common type errors, with exact messages
 
-Each block pairs a mistake with the message Lait currently produces.  Two things
-to notice: every mismatch is reported as `Cannot unify X with Y`, with no
-expected/got framing and no offending sub-expression, at the position of the
-whole enclosing expression -- except in a `match`, where the arm that disagrees
-is reported on its own body (see "Where an error lands" at the end of this
-file); and the type on the left of `with` is whichever the checker reached
-first, which is not always the one the user would name first.
+Each block pairs a mistake with the message Lait currently produces.  The
+checker is bidirectional: wherever the context already knows what a type must
+be -- an annotation, a function's parameter, the arms of a `match` -- it pushes
+that expectation inward and checks against it, so a mismatch is reported on the
+sub-expression that caused it and can say which type was wanted and which was
+found.  A mismatch between two types neither of which is an expectation -- the
+two sides of a `#test` -- still reads `Cannot unify X with Y`, where the type
+on the left is whichever the checker reached first.
+
+When the expectation and what was found differ only deep inside, the message
+names the whole types and then the parts that clash, so `List<Int>` against
+`List<String>` does not report as a bare `Int`/`String`.  Where each message
+lands is pinned separately, at the end of this file.
 -/
 
 -- ===== Mixing numbers and strings =====
 
-/-- error: Cannot unify String with Int -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl teAddString
   #eval 1 + "1"
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type Int, but String was expected here -/
 #guard_msgs in
 {lait_decl teConcatNumber
   #eval "count: " ++ 1
@@ -35,13 +41,13 @@ first, which is not always the one the user would name first.
 
 -- ===== Truthiness =====
 
-/-- error: Cannot unify Int with Bool -/
+/-- error: This expression has type Int, but Bool was expected here -/
 #guard_msgs in
 {lait_decl teIfInt
   #eval if 1 then "yes" else "no"
 }
 
-/-- error: Cannot unify String with Bool -/
+/-- error: This expression has type String, but Bool was expected here -/
 #guard_msgs in
 {lait_decl teIfString
   #eval if "" then 1 else 2
@@ -49,14 +55,14 @@ first, which is not always the one the user would name first.
 
 -- ===== Branches of different types =====
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl teBranchTypes
   #eval if true then 1 else "one"
 }
 
 -- Same for `match` arms.
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl teMatchArmTypes
   type Color := | Red | Green
@@ -71,7 +77,7 @@ first, which is not always the one the user would name first.
 
 -- `add(1, 2)` is not a syntax error: it applies `add` to the pair `(1, 2)`, so
 -- the message is about a pair where an `Int` was wanted.
-/-- error: Cannot unify Int with Int * Int -/
+/-- error: This expression has type a * b, but Int was expected here -/
 #guard_msgs in
 {lait_decl teTupleCall
   def add (x : Int) (y : Int) : Int := x + y
@@ -81,7 +87,7 @@ first, which is not always the one the user would name first.
 -- ===== Wrong number of arguments =====
 
 -- Too many: the result of the last application is not a function.
-/-- error: Cannot unify Int with Int -> a -/
+/-- error: This expression has type Int -> Int -> Int, but a -> b -> c -> d was expected here: Int is not c -> d -/
 #guard_msgs in
 {lait_decl teTooManyArgs
   def add (x : Int) (y : Int) : Int := x + y
@@ -89,7 +95,7 @@ first, which is not always the one the user would name first.
 }
 
 -- Too few: a function where a value was wanted.
-/-- error: Cannot unify Int -> Int with Int -/
+/-- error: This expression has type Int -> Int -> Int, but a -> Int was expected here: Int -> Int is not Int -/
 #guard_msgs in
 {lait_decl teTooFewArgs
   def add (x : Int) (y : Int) : Int := x + y
@@ -97,7 +103,7 @@ first, which is not always the one the user would name first.
 }
 
 -- Applying something that is not a function.
-/-- error: Cannot unify Int with Int -> a -/
+/-- error: This expression has type Int, but a -> b was expected here -/
 #guard_msgs in
 {lait_decl teApplyNonFunction
   #eval 1 2
@@ -107,7 +113,7 @@ first, which is not always the one the user would name first.
 
 -- `List.map` takes the list first; backwards gives a `List` vs function type
 -- mismatch.
-/-- error: Cannot unify List<a> with Int -> Int -/
+/-- error: This expression has type a -> b, but List<c> was expected here -/
 #guard_msgs in
 {lait_decl teMapArgOrder
   #include stdlib
@@ -121,14 +127,14 @@ first, which is not always the one the user would name first.
 
 -- ===== Heterogeneous collections =====
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl teMixedList
   #include stdlib
   #eval [1, "a"]
 }
 
-/-- error: Cannot unify Int with Bool -/
+/-- error: This expression has type Bool, but Int was expected here -/
 #guard_msgs in
 {lait_decl teMixedCons
   #include stdlib
@@ -137,14 +143,14 @@ first, which is not always the one the user would name first.
 
 -- ===== Comparing different types =====
 
-/-- error: Cannot unify String with Int -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl teCompareMixed
   #eval 1 == "1"
 }
 
 -- `<` and friends are `Int`-only.
-/-- error: Cannot unify String with Int -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl teCompareStrings
   #eval "a" < "b"
@@ -215,7 +221,7 @@ first, which is not always the one the user would name first.
 
 -- ===== Constructors =====
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type String, but Int was expected here -/
 #guard_msgs in
 {lait_decl teCtorArgType
   type Box := | Box (v : Int)
@@ -223,7 +229,7 @@ first, which is not always the one the user would name first.
 }
 
 -- Applied to too few arguments, a constructor is a function.
-/-- error: Cannot unify Int -> Box with Box -/
+/-- error: This expression has type Int -> Box, but Box was expected here -/
 #guard_msgs in
 {lait_decl teCtorPartial
   type Box := | Box (v : Int)
@@ -232,19 +238,19 @@ first, which is not always the one the user would name first.
 
 -- ===== Annotations the body contradicts =====
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type Int, but String was expected here -/
 #guard_msgs in
 {lait_decl teAnnotationMismatch
   def f : String := 1
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type Int, but String was expected here -/
 #guard_msgs in
 {lait_decl teReturnTypeMismatch
   def f (x : Int) : String := x
 }
 
-/-- error: Cannot unify Int with String -/
+/-- error: This expression has type Int, but String was expected here -/
 #guard_msgs in
 {lait_decl teLetAnnotationMismatch
   #eval let x : String := 1 in x
@@ -254,7 +260,7 @@ first, which is not always the one the user would name first.
 
 -- `set` returns `()`, so using its result as a value is a type error.  This is
 -- what "why can't I write two statements in a row?" looks like.
-/-- error: Cannot unify Unit with Int -/
+/-- error: This expression has type Ref<a> -> a -> Unit, but b -> c -> Int was expected here: Unit is not Int -/
 #guard_msgs in
 {lait_decl teSequencing
   #include stdlib
@@ -272,7 +278,7 @@ first, which is not always the one the user would name first.
 }
 
 -- Reading through a non-reference.
-/-- error: Cannot unify Int with Ref<a> -/
+/-- error: This expression has type Int, but Ref<a> was expected here -/
 #guard_msgs in
 {lait_decl teDerefNonRef
   #eval builtin_get(1)
@@ -308,9 +314,10 @@ elab "#errorRanges " c:command : command => do
 
 -- A `match` arm whose body has the wrong type is reported on that body, not on
 -- the `match` -- the arm is the only thing distinguishing the two types, so
--- reporting on the whole expression would leave the reader to find it.
+-- reporting on the whole expression would leave the reader to find it.  Each
+-- arm is checked against the type the `match` is required to have.
 /--
-info: "green"  ⇒  Cannot unify Int with String
+info: "green"  ⇒  This expression has type String, but Int was expected here
 -/
 #guard_msgs in
 #errorRanges
@@ -325,7 +332,7 @@ info: "green"  ⇒  Cannot unify Int with String
 
 -- Same for the catch-all arm.
 /--
-info: false  ⇒  Cannot unify Int with Bool
+info: false  ⇒  This expression has type Bool, but Int was expected here
 -/
 #guard_msgs in
 #errorRanges
@@ -338,9 +345,11 @@ info: false  ⇒  Cannot unify Int with Bool
     end
 }
 
--- A multi-line arm body is covered whole; the report still starts at the arm.
+-- Within a multi-line arm, the expectation is pushed through the `let` to the
+-- expression that actually has the wrong type, rather than covering the body
+-- whole.
 /--
-info: let y := 3 in       false  ⇒  Cannot unify Int with Bool
+info: false  ⇒  This expression has type Bool, but Int was expected here
 -/
 #guard_msgs in
 #errorRanges
@@ -355,13 +364,14 @@ info: let y := 3 in       false  ⇒  Cannot unify Int with Bool
     end
 }
 
--- When no single arm is at fault -- every arm agrees, and it is the signature
--- they disagree with -- there is no arm to blame, and the report falls back to
--- the enclosing command.  (A `def` with parameters pins its return type through
--- a synthesized `let` that carries no source span, which is why this lands on
--- the whole block rather than on the `def`.)
+-- When every arm agrees with the others and it is the *signature* they
+-- disagree with, the declared return type is what the arms are checked
+-- against, so the first one to disagree is blamed.  (A `def` with parameters
+-- pins its return type through a synthesized `let` that carries no source
+-- span; before the return type was pushed inward, there was no arm to blame
+-- and this landed on the whole block.)
 /--
-info: {lait_decl teArmRangeAllArms   type Color := | Red | Green   def f (c : Color) : Int :=     match c with     | Red => false     | Green => false     end }  ⇒  Cannot unify Bool with Int
+info: false  ⇒  This expression has type Bool, but Int was expected here
 -/
 #guard_msgs in
 #errorRanges
@@ -372,4 +382,32 @@ info: {lait_decl teArmRangeAllArms   type Color := | Red | Green   def f (c : Co
     | Red => false
     | Green => false
     end
+}
+
+-- A fully annotated recursive `def` has its signature from the start, so the
+-- first use of a recursive call cannot decide its return type.  (Before, the
+-- comparison made `foo`'s return type `String`, and the error landed on the
+-- *correct* `foo n + 4`.)
+/--
+info: "not a string!"  ⇒  This expression has type String, but Int was expected here
+-/
+#guard_msgs in
+#errorRanges
+{lait_decl teRecursiveCallReturnType
+  def foo (n : Int) : Int :=
+    if foo n == "not a string!"
+    then 32
+    else foo n + 4
+}
+
+-- Likewise for a sibling in a fully annotated `and` group.  (Before, `bar`'s
+-- return type was decided by `foo`'s body, and the error landed on `foo`.)
+/--
+info: "not a string!"  ⇒  This expression has type String, but Int was expected here
+-/
+#guard_msgs in
+#errorRanges
+{lait_decl teSiblingCallReturnType
+  def foo (n : Int) : Int := if bar n == "not a string!" then 1 else 2
+  and bar (n : Int) : Int := foo n
 }

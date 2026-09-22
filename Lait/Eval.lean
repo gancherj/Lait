@@ -337,7 +337,7 @@ partial def Exp.eval (env : List Val) (e : Exp t m) : ExpEval Val := do
   match e with
   | .mk _ (.Const c) => pure (.VConst c)
   | .mk _ (.Lam _ _ body) => pure (.VClosure env body)
-  | .mk _ (.Rec _ body) => pure (.VRec env body)
+  | .mk _ (.Rec _ _ body) => pure (.VRec env body)
   | .mk stx (.Var i) =>
     match env[i.val]! with
     | .VFailed name msg =>
@@ -359,7 +359,7 @@ partial def Exp.eval (env : List Val) (e : Exp t m) : ExpEval Val := do
     pure (.VPair (← Exp.eval env e1) (← Exp.eval env e2))
   | .mk stx (.Error e) => do
     let s := (<- Exp.eval env e).getRawString
-    throwExp stx $ "ERROR: " ++ s
+    throwExp stx $ s
   | .mk _ (.Print e) => do
     let v ← Exp.eval env e
     ExpEval.log (s!"{v.getRawString}")
@@ -468,16 +468,18 @@ def Decl.eval (d : Decl n m) (env : List Val) : DeclEval (List Val) :=
     | .error e => do
       Lean.logErrorAt stx e
       pure env
-  | .mk stx (.DeclTestError e msg) => do
+  | .mk stx (.DeclTestError e msg?) => do
     match ← DeclEval.scopeExpError stx (Exp.eval env e) with
     | .ok v => do
-      Lean.logErrorAt stx s!"Test failed: expected an error containing \"{msg}\" but evaluation succeeded with {v.pretty}"
+      let expected := match msg? with
+        | some msg => s!"an error \"{msg}\""
+        | none => "an error"
+      Lean.logErrorAt stx s!"Test failed: expected {expected} but evaluation succeeded with {v.pretty}"
       pure env
     | .error err => do
-      if msg.isEmpty || (err.splitOn msg).length > 1 then
-        pure ()
-      else
-        Lean.logErrorAt stx s!"Test failed: expected an error containing \"{msg}\" but got error \"{err}\""
+      if let some msg := msg? then
+        if err != msg then
+          Lean.logErrorAt stx s!"Test failed: expected an error \"{msg}\" but got error \"{err}\""
       pure env
   | .mk _ (.DeclInductive _ _ cs) => do
     let _ ← cs.mapM fun (cname, _) => addConstructor cname
