@@ -5,7 +5,7 @@ import Lait.Elab
 
   def forever := fix f. fun (_ : Unit) => f ()
 
-  #test_error forever () ~ "Step limit exceeded"
+  #test_error forever () ~ "Step limit exceeded: evaluation did not terminate"
 
 }
 

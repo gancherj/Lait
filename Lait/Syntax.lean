@@ -267,7 +267,7 @@ inductive DeclX : Nat -> Nat -> Type where
   | DeclTypeAlias : String -> TyScheme -> DeclX n n
   | DeclEval : Exp 0 n -> DeclX n n
   | DeclTest : Exp 0 n -> Exp 0 n -> DeclX n n
-  | DeclTestError : Exp 0 n -> String -> DeclX n n
+  | DeclTestError : Exp 0 n -> Option String -> DeclX n n
   | DeclCheck : Exp 0 n -> DeclX n n
   | DeclInductive : String ->  (tvars : List String) ->
     List (String × List (String × Ty tvars.length)) ->

@@ -168,8 +168,8 @@ inductive DeclEntryX where
   | DeclEval : Exp -> DeclEntryX
   | DeclTest : Exp -> Exp -> DeclEntryX
   -- Assert that evaluating the expression aborts with an error whose message
-  -- contains the given substring.
-  | DeclTestError : Exp -> String -> DeclEntryX
+  -- is exactly the given string (or with any error at all, if `none`).
+  | DeclTestError : Exp -> Option String -> DeclEntryX
   | DeclCheck : Exp -> DeclEntryX
   deriving Repr, Lean.ToExpr
 
