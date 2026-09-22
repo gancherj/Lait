@@ -67,8 +67,8 @@ partial def Exp.fromSurface (exp : Surface.Exp) (tvars : List String) (vars : Li
   | .mk stx (.Match e cases owild) => do
     let cases' <- casesFromSurface cases owild tvars vars
     pure (.mk stx (.Match (<- Exp.fromSurface e tvars vars) cases'))
-  | .mk stx (.Rec x e) => do
-      pure (.mk stx (.Rec x (<- Exp.fromSurface e tvars (x :: vars))))
+  | .mk stx (.Rec x oty e) => do
+      pure (.mk stx (.Rec x (<- oty.mapM (Ty.fromSurface · tvars)) (<- Exp.fromSurface e tvars (x :: vars))))
 
 partial def casesFromSurface (cases : List (String × List String × Surface.Exp)) (owild : Option Surface.Exp) (tvars : List String) (vars : List String) : CommandElabM (ExpMatchCases tvars.length vars.length) :=
   match cases with

@@ -383,3 +383,31 @@ info: false  ⇒  This expression has type Bool, but Int was expected here
     | Green => false
     end
 }
+
+-- A fully annotated recursive `def` has its signature from the start, so the
+-- first use of a recursive call cannot decide its return type.  (Before, the
+-- comparison made `foo`'s return type `String`, and the error landed on the
+-- *correct* `foo n + 4`.)
+/--
+info: "not a string!"  ⇒  This expression has type String, but Int was expected here
+-/
+#guard_msgs in
+#errorRanges
+{lait_decl teRecursiveCallReturnType
+  def foo (n : Int) : Int :=
+    if foo n == "not a string!"
+    then 32
+    else foo n + 4
+}
+
+-- Likewise for a sibling in a fully annotated `and` group.  (Before, `bar`'s
+-- return type was decided by `foo`'s body, and the error landed on `foo`.)
+/--
+info: "not a string!"  ⇒  This expression has type String, but Int was expected here
+-/
+#guard_msgs in
+#errorRanges
+{lait_decl teSiblingCallReturnType
+  def foo (n : Int) : Int := if bar n == "not a string!" then 1 else 2
+  and bar (n : Int) : Int := foo n
+}

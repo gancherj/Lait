@@ -578,7 +578,8 @@ partial def ExpX.unguardedTyVars : ExpX n m → Lean.NameSet
     (Exp.unguardedTyVars e1).union (Exp.unguardedTyVars e2)
   | .If e1 e2 e3 =>
     ((Exp.unguardedTyVars e1).union (Exp.unguardedTyVars e2)).union (Exp.unguardedTyVars e3)
-  | .Rec _ e | .Error e | .Print e | .Fst e | .Snd e | .Alloc e | .Deref e =>
+  | .Rec _ oty e => (annFVars oty).union (Exp.unguardedTyVars e)
+  | .Error e | .Print e | .Fst e | .Snd e | .Alloc e | .Deref e =>
     Exp.unguardedTyVars e
   | .Op _ es => ExpList.unguardedTyVars es
   | .Match e cs => (Exp.unguardedTyVars e).union (ExpMatchCases.unguardedTyVars cs)
@@ -626,7 +627,7 @@ mutual
     | .Const _ | .Var _ | .Lam .. | .Loc _ => true
     -- `rec x => e` builds a closure without running `e`, but a projection below may force
     -- it later, so `e` must be non-expansive too.
-    | .Rec _ e => Exp.isValue c.under e
+    | .Rec _ _ e => Exp.isValue c.under e
     | .Pair e1 e2 => Exp.isValue c e1 && Exp.isValue c e2
     -- Projecting out of a value neither allocates nor has an effect.  Not values in SML,
     -- but they are how `elabDefMutual` pulls each function out of its recursive bundle --
@@ -884,11 +885,17 @@ mutual
     | .Print e => do
       let _ ← Exp.infer (some (.mk stx .Str)) e
       unifyReturn stx exp (.mk stx .Unit)
-    | .Rec _ e1 => do
-      -- The recursive variable's type is the whole `rec`'s type, so an expectation makes
-      -- recursive calls check against the real signature instead of against a
-      -- placeholder only pinned down once the body is done.
-      let r ← expOr stx exp
+    | .Rec _ oty e1 => do
+      -- The recursive variable's type is the whole `rec`'s type -- its annotation, when a
+      -- surface pass knows all of it, or else what the context expects -- so recursive
+      -- calls check against the real signature instead of against a placeholder only
+      -- pinned down once the body is done.
+      let r ← match oty with
+        | none => expOr stx exp
+        | some t => do
+          let t ← normalizeTy t
+          if let some t' := exp then unify (← reportAt stx) t t' .check
+          pure t
       let _ ← withVar (TyScheme.mono r) (← Check.locOf stx) (Exp.infer (some r) e1)
       pure r
     | .Deref e => do
@@ -1040,7 +1047,8 @@ partial def Decl.check : {n m : Nat} → (d : Decl n m) → Check m α → Check
     -- The body is checked against the signature rather than unified with it afterwards.
     -- This only bites for a `def` with no parameters: one *with* parameters is lowered by
     -- `Surface.elabDefMutual` to a position-less `Rec`/`Lam` chain declared with no type
-    -- of its own, and its return type arrives through the synthetic `let` that pins it.
+    -- of its own.  Its signature is on the `Rec` when fully annotated, and its return type
+    -- also arrives through the synthetic `let` that pins it.
     -- Naming the declaration as the fallback report position is what keeps errors in that
     -- chain off the whole command.
     let inferredTy ← withHovers <| withTyVarScope us <|

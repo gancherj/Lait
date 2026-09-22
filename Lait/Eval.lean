@@ -337,7 +337,7 @@ partial def Exp.eval (env : List Val) (e : Exp t m) : ExpEval Val := do
   match e with
   | .mk _ (.Const c) => pure (.VConst c)
   | .mk _ (.Lam _ _ body) => pure (.VClosure env body)
-  | .mk _ (.Rec _ body) => pure (.VRec env body)
+  | .mk _ (.Rec _ _ body) => pure (.VRec env body)
   | .mk stx (.Var i) =>
     match env[i.val]! with
     | .VFailed name msg =>

@@ -1,11 +1,8 @@
 import Lait
 #lait
 
-type Foo := | A | B | C
 
-def f (v : Foo) : Int :=
-  match v with
-  | A => "hi"
-  | B => 32
-  | C => 32
-  end
+def foo (n : Int) : Int :=
+  if foo n == "not a string!"
+  then 32
+  else foo n + 4

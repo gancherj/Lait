@@ -448,7 +448,7 @@ partial def elabLaitExp (e : Lean.TSyntax `lait_exp) : TermElabM Surface.Exp :=
     mkSurfaceExp e.raw (.Snd (← elabLaitExp e1))
   | `(lait_exp | fix $id:lait_ident . $e1:lait_exp) => do
     let name ← elabLaitIdent id
-    mkSurfaceExp e.raw (.Rec name (← elabLaitExp e1))
+    mkSurfaceExp e.raw (.Rec name none (← elabLaitExp e1))
   | `(lait_exp | match $e1:lait_exp with $arms:lait_match_arm* end) => do
       let scrut ← elabLaitExp e1
       let args <- arms.mapM elabLaitMatchArm

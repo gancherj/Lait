@@ -3,7 +3,7 @@ import Lait.Elab
 
 {lait_decl stdlib
 
-  def LAIT_VERSION : String := "1.1"
+  def LAIT_VERSION : String := "1.2"
 
   type List<a> := | Nil | Cons (h : a) (t : List<a>)
 

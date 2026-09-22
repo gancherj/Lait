@@ -31,6 +31,7 @@ end
 namespace Ty
 
 def Arrow (t1 t2 : Ty) : Ty := .mk .missing (.Arrow t1 t2)
+def Prod (t1 t2 : Ty) : Ty := .mk .missing (.Prod t1 t2)
 def TApp (s : String) (ts : List Ty) : Ty := .mk .missing (.TApp s ts)
 def Var (s : String) : Ty := .mk .missing (.Var s)
 
@@ -72,7 +73,8 @@ inductive ExpX where
   | If : Exp -> Exp -> Exp -> ExpX
   | Pair : Exp -> Exp -> ExpX
   | Fst : Exp -> ExpX
-  | Rec : String -> Exp -> ExpX
+  -- The optional type is that of the whole `rec`: given only when all of it is known.
+  | Rec : String -> Option Ty -> Exp -> ExpX
   | Snd : Exp -> ExpX
   | Error : Exp -> ExpX
   | Print : Exp -> ExpX
@@ -114,7 +116,7 @@ partial def substVars (m : List (String × Exp)) : Exp -> Exp
     | .Pair e1 e2 => .mk stx (.Pair (substVars m e1) (substVars m e2))
     | .Fst e => .mk stx (.Fst (substVars m e))
     | .Snd e => .mk stx (.Snd (substVars m e))
-    | .Rec x e => .mk stx (.Rec x (substVars (rem [x]) e))
+    | .Rec x oty e => .mk stx (.Rec x oty (substVars (rem [x]) e))
     | .Error e => .mk stx (.Error (substVars m e))
     | .Print e => .mk stx (.Print (substVars m e))
     | .Op s es => .mk stx (.Op s (es.map (substVars m)))
@@ -132,6 +134,12 @@ def mkTuple : List Exp -> Exp
   | [] => .mk .missing (.Const .Unit)
   | [e] => e
   | e :: es => .mk .missing (.Pair e (mkTuple es))
+
+-- The type of `mkTuple es`, given the type of each of `es`.
+def mkTupleTy : List Ty -> Ty
+  | [] => .mk .missing .Unit
+  | [t] => t
+  | t :: ts => Ty.Prod t (mkTupleTy ts)
 
 -- Apply `snd` `i` times.
 def sndN : Nat -> Exp -> Exp
@@ -270,7 +278,7 @@ def elabDefFn (d : DeclEntry) : List DeclEntry :=
      | (x, argTy) :: args' =>
       .Lam x (some argTy) $ go_e args' body
     let fn_ty := args.foldr (fun (_, argTy) acc => .Arrow argTy acc) oty
-    let fn_exp : Exp := Exp.mk d.stx (.Rec s (go_e args e))
+    let fn_exp : Exp := Exp.mk d.stx (.Rec s (some fn_ty) (go_e args e))
     [(⟨d.stx, .DeclEntryDef s (some fn_ty) fn_exp⟩ : DeclEntry)]
   | _ => [d]
 
@@ -302,10 +310,18 @@ def elabDefMutual (d : DeclEntry) : List DeclEntry :=
         | none => body'
       args.foldr (fun (x, ty) acc => Exp.Lam x ty acc) bodyRet
     let tuple := Exp.mkTuple (clauses.map mkF)
+    -- A function's full type, when every parameter and its return type are annotated.
+    let fnTy := fun (clause : Lean.Syntax × String × List (String × Option Ty) × Option Ty × Exp) =>
+      let (_, _, args, ret, _) := clause
+      args.foldr (fun (arg : String × Option Ty) acc => do Ty.Arrow (← arg.2) (← acc)) ret
+    -- The bundle's type, when every function's is known, is what recursive calls see
+    -- from the start.  Otherwise the annotations above still reach the bodies, but a
+    -- function's type is only learned from its body.
+    let bundleTy := (clauses.mapM fnTy).map Exp.mkTupleTy
     -- The bundle node is synthetic: give it no source span so its (pair) type
     -- doesn't get recorded as a hover on the first function's identifier, which
     -- shares `d.stx`.  Each function's own hover comes from its `DeclEntryDef`.
-    let fixExp : Exp := .mk .missing (.Rec selfName tuple)
+    let fixExp : Exp := .mk .missing (.Rec selfName bundleTy tuple)
     clauses.mapIdx (fun i clause =>
       let (stx, name, _, _, _) := clause
       ⟨stx, .DeclEntryDef name none (Exp.nthProj i k fixExp)⟩)
