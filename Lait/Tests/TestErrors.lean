@@ -206,3 +206,13 @@ and `try` cannot catch it.
   def alsoBad := true + 1
   #test 1 === 2
 }
+
+-- ===== Top-level `let` (a common mistake for `def`) =====
+
+/-- error: `let` cannot be used at the top level. To define `foo`, use `def` instead of `let`, e.g. `def foo := ...`. (`let ... in ...` is only for local definitions inside an expression.) -/
+#guard_msgs in
+{lait_decl errTopLevelLet
+  let foo := 32
+  let bar : Int := 1
+  def ok := 5
+}

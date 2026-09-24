@@ -168,10 +168,6 @@ elab "{lait_ty" t:lait_ty "}" : term => do
   return toExpr (← elabLaitTy t)
 
 
-#check {lait_ty  Bool}
-#check {lait_ty  Int}
--- Tick-prefixed type variables cannot appear raw in this `.lean` file (Lean's
--- lexer reads `'a` as a character literal). They are exercised in `Lait/Tests.lean`.
 
 
 declare_syntax_cat lait_exp
@@ -205,8 +201,8 @@ syntax "..." : lait_exp
 syntax "fun" lait_ident "=>" lait_exp : lait_exp
 syntax "fun" lait_typed_var "=>" lait_exp : lait_exp
 syntax:70 lait_exp:70 lait_exp:71 : lait_exp
-syntax "let" lait_ident ":" lait_ty ":=" lait_exp "in" lait_exp : lait_exp
-syntax "let" lait_ident ":=" lait_exp "in" lait_exp : lait_exp
+syntax:70 "let" lait_ident ":" lait_ty ":=" lait_exp "in" lait_exp : lait_exp
+syntax:70 "let" lait_ident ":=" lait_exp "in" lait_exp : lait_exp
 syntax "error" lait_exp : lait_exp
 syntax "internal_print" lait_exp : lait_exp
 syntax "(" lait_exp "," lait_exp ")" : lait_exp
@@ -584,6 +580,10 @@ Include a Lait module. The most common use case is `#include stdlib`.
 -/
 syntax "#include" ident : lait_decl
 
+-- Not a real declaration: parsed only so that a top-level `let` (a common mistake
+-- for `def`) gets a helpful error from `elabLaitDecl` instead of a parse error.
+syntax "let" lait_ident (":" lait_ty)? ":=" lait_exp ("in" lait_exp)? : lait_decl
+
 open Lean Elab Meta
 
 def mkSurfaceDeclEntry (stx : Lean.Syntax) (x : Surface.DeclEntryX) : TermElabM Surface.DeclEntry :=
@@ -717,6 +717,9 @@ partial def elabLaitDecl (st : IO.Ref IncludeState) (d : Lean.TSyntax `lait_decl
            pure entry
          mkSurfaceDeclEntry d.raw (.DeclList ds)
       | none => throwErrorAt e.raw s!"unknown lait module `{m}`"
+  | `(lait_decl | let $id:lait_ident $[: $_t:lait_ty]? := $_e:lait_exp $[in $_body:lait_exp]?) => do
+    let name ← elabLaitIdent id
+    throwErrorAt d.raw m!"`let` cannot be used at the top level. To define `{name}`, use `def` instead of `let`, e.g. `def {name} := ...`. (`let ... in ...` is only for local definitions inside an expression.)"
   | _ => throwUnsupportedSyntax
 
 /-- Separate syntax category for `#enable_lait`.  A `lait_module` is a *single*
