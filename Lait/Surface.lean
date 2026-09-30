@@ -106,7 +106,9 @@ partial def substVars (m : List (String × Exp)) : Exp -> Exp
     match ex with
     | .Var s =>
       match m.find? (fun (n, _) => n == s) with
-      | some (_, e') => e'
+      -- Keep the occurrence's span on the replacement, so errors and hovers land on
+      -- the name the user wrote rather than the nearest positioned ancestor.
+      | some (_, .mk _ ex') => .mk stx ex'
       | none => .mk stx (.Var s)
     | .Const c => .mk stx (.Const c)
     | .Lam x oty e => .mk stx (.Lam x oty (substVars (rem [x]) e))
