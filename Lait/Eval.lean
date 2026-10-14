@@ -426,6 +426,12 @@ def addConstructor (cname : String) : DeclEval Unit := do
 -- `env` holds the values of in-scope (prior) declarations, innermost (de Bruijn
 -- index 0) first.  Definitions are added to the environment by reference rather
 -- than substituted into later bodies.
+/-- Mark a passing `#test`/`#test_error` with the editor's "goals accomplished" gutter
+checkmark: a silent information message carrying the tag the Lean extension looks for. -/
+def logTestPassed (stx : Lean.Syntax) : DeclEval Unit :=
+  Lean.logAt stx (.tagged `goalsAccomplished m!"Test passed!")
+    (severity := .information) (isSilent := true)
+
 def Decl.eval (d : Decl n m) (env : List Val) : DeclEval (List Val) :=
   match d with
   | .mk _ .DeclNil => pure env
@@ -464,6 +470,7 @@ def Decl.eval (d : Decl n m) (env : List Val) : DeclEval (List Val) :=
     | .ok (v1, v2) => do
       let b ← v1.eq stx v2
       if not b then Lean.logErrorAt stx s!"Test failed: got {v1.pretty} but expected {v2.pretty}"
+      else logTestPassed stx
       pure env
     | .error e => do
       Lean.logErrorAt stx e
@@ -477,9 +484,12 @@ def Decl.eval (d : Decl n m) (env : List Val) : DeclEval (List Val) :=
       Lean.logErrorAt stx s!"Test failed: expected {expected} but evaluation succeeded with {v.pretty}"
       pure env
     | .error err => do
-      if let some msg := msg? then
+      match msg? with
+      | some msg =>
         if err != msg then
           Lean.logErrorAt stx s!"Test failed: expected an error \"{msg}\" but got error \"{err}\""
+        else logTestPassed stx
+      | none => logTestPassed stx
       pure env
   | .mk _ (.DeclInductive _ _ cs) => do
     let _ ← cs.mapM fun (cname, _) => addConstructor cname
