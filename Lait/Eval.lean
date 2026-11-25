@@ -137,9 +137,15 @@ def EvalResult.pretty (r : EvalResult) : String :=
 instance : ToString EvalResult where
   toString r := r.pretty
 
+/-- The monad primitive operations run in: they may fail, and may perform `IO` (`rand`).
+They cannot run in `ExpEval` itself, since `EvalState` holds the operation table. -/
+abbrev OpEval := ExceptT (ExpError × Lean.Syntax) IO
+
+abbrev OpFn := Lean.Syntax -> List Val -> OpEval Val
+
 structure EvalState where
   heap : Heap
-  opMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (ExpError × Lean.Syntax) Val)
+  opMap : Std.TreeMap String OpFn
   timeout : UInt32 := 3000
   /-- Interpreter steps per top-level evaluation (`Exp.eval`, `Val.whnf`, `Val.apply`). -/
   maxSteps : Nat := 100000
@@ -148,12 +154,12 @@ structure EvalState where
   /-- Results of the `#eval`s run so far, in declaration order. -/
   evalResults : Array EvalResult := #[]
 
-def initOpMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (ExpError × Lean.Syntax) Val) :=
-  Std.TreeMap.ofList [
+def initOpMap : Std.TreeMap String OpFn :=
+  Std.TreeMap.ofList (α := String) (β := OpFn) [
     ("+", fun stx vs => do
       match vs with
       | [Val.VConst (Const.Num n1), .VConst (Const.Num n2)] => pure (Val.VConst (Const.Num (n1 + n2)))
-      | _ => Except.error (ExpError.UserError s!"Wrong inputs to addition", stx)
+      | _ => throw (ExpError.UserError s!"Wrong inputs to addition", stx)
     ),
     ("-", fun stx vs => do
       match vs with
@@ -213,9 +219,21 @@ def initOpMap : Std.TreeMap String (Lean.Syntax -> List Val -> Except (ExpError 
     ("==", fun (stx : Lean.Syntax) (vs : List Val) => do
       match vs with
       | [v1, v2] => do
-          let b <- v1.eq stx v2
+          let b <- MonadExcept.ofExcept (v1.eq stx v2)
           pure (Val.VConst (Const.Bool b))
       | _ => throw (ExpError.UserError s!"Wrong inputs to ==", stx)
+    ),
+    -- `rand lo hi` is a uniformly random integer in `[lo, hi]`, or `0` if `lo` is not
+    -- less than `hi`.
+    ("rand", fun stx vs => do
+      match vs with
+      | [Val.VConst (Const.Num lo), .VConst (Const.Num hi)] =>
+        if lo < hi then
+          let n ← (IO.rand 0 (hi - lo).toNat : IO Nat)
+          pure (Val.VConst (Const.Num (lo + n)))
+        else
+          pure (Val.VConst (Const.Num 0))
+      | _ => throw (ExpError.UserError s!"Wrong inputs to rand", stx)
     ),
   ]
 

@@ -512,6 +512,7 @@ def initTcOpMap : Std.TreeMap String OpSig :=
     , (">=", mono [int, int] bool)
     , ("==", { tyVars := [`_laitEqTy], argTys := [eqTy, eqTy], outTy := bool })
     , ("toString", { tyVars := [`_laitAnyTy], argTys := [anyTy], outTy := str })
+    , ("rand", mono [int, int] int)
     ]
 
 -- The primitive types.  Listing them here keeps them out of reach of `type` declarations.

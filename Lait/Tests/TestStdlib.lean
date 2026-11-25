@@ -214,3 +214,20 @@ info: Ref<a> -> a -> Unit
   -- something that would itself fail.
   #test_error assert (1 == (error "evaluated first")) ~ "evaluated first"
 }
+
+-- ===== rand =====
+
+{lait_decl stdRand
+  #include stdlib
+
+  -- `rand lo hi` is a random integer in `[lo, hi]`.
+  def inRange (lo : Int) (hi : Int) : Bool :=
+    let r := rand lo hi in r >= lo && r <= hi
+  #test inRange 0 10 === true
+  #test inRange (-5) 5 === true
+  #test inRange 3 4 === true
+
+  -- When `lo` is not less than `hi`, the result is `0`.
+  #test rand 5 5 === 0
+  #test rand 10 1 === 0
+}
