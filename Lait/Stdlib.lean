@@ -3,7 +3,7 @@ import Lait.Elab
 
 {lait_decl stdlib
 
-  def LAIT_VERSION : String := "1.3"
+  def LAIT_VERSION : String := "1.4"
 
   type List<a> := | Nil | Cons (h : a) (t : List<a>)
 
@@ -91,6 +91,9 @@ import Lait.Elab
   def set (r : Ref<a>) (x : a) : Unit := builtin_set(r, x)
 
   def toString (n : a) : String := %toString {n}
+
+  -- A random integer between `lo` and `hi` (inclusive), or `0` if `lo` is not less than `hi`.
+  def rand (lo : Int) (hi : Int) : Int := %rand {lo, hi}
 
   def print x := internal_print x
 
